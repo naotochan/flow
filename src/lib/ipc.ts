@@ -1,0 +1,127 @@
+import { invoke } from "@tauri-apps/api/core";
+
+export interface SttConfig {
+  provider: "openai_cloud" | "local_api";
+  api_key: string;
+  base_url: string;
+  model: string;
+  preset: string;
+  preset_api_keys: Record<string, string>;
+}
+
+export interface LlmConfig {
+  enabled: boolean;
+  provider: "claude" | "openai_compatible";
+  api_key: string;
+  base_url: string;
+  model: string;
+  preset: string;
+  preset_api_keys: Record<string, string>;
+}
+
+export interface HotkeyConfig {
+  key: string;
+  double_tap_ms: number;
+}
+
+export interface LanguageConfig {
+  mode: "auto" | "japanese" | "english";
+  primary: string;
+}
+
+export interface LocalSttServerConfig {
+  model: string;
+  port: number;
+  host: string;
+  python_path: string;
+}
+
+export interface AppSettings {
+  stt: SttConfig;
+  llm: LlmConfig;
+  activation_mode: "hold" | "double_tap";
+  hotkey: HotkeyConfig;
+  language: LanguageConfig;
+  auto_paste: boolean;
+  local_stt_server: LocalSttServerConfig;
+  onboarding_completed: boolean;
+  onboarding_step: number;
+  ui_language: "ja" | "en";
+}
+
+export const getSettings = () => invoke<AppSettings>("get_settings");
+
+export const saveSettings = (settings: AppSettings) =>
+  invoke("save_settings", { settings });
+
+export const testMicrophone = () => invoke<string>("test_microphone");
+export interface SttTestResult {
+  raw_text: string;
+  processed_text: string | null;
+}
+export const testMicrophoneStt = () => invoke<SttTestResult>("test_microphone_stt");
+
+export const checkSttServer = () => invoke<boolean>("check_stt_server");
+export const startSttServer = () => invoke<void>("start_stt_server");
+export const stopSttServer = () => invoke<void>("stop_stt_server");
+export const checkDownloadedModels = () => invoke<string[]>("check_downloaded_models");
+export const downloadModel = (model: string) => invoke<void>("download_model", { model });
+export const cancelDownload = () => invoke<void>("cancel_download");
+export const setupLocalWhisper = () => invoke<void>("setup_local_whisper");
+export const checkVenvExists = () => invoke<boolean>("check_venv_exists");
+export const openSystemPreferences = (pane: string) =>
+  invoke<void>("open_system_preferences", { pane });
+
+export interface PermissionStatus {
+  accessibility: boolean;
+  microphone: boolean;
+  input_monitoring: boolean;
+}
+export const checkPermissions = () => invoke<PermissionStatus>("check_permissions");
+export const initializeHotkeys = () => invoke<void>("initialize_hotkeys");
+export const saveOnboardingStep = (step: number) =>
+  invoke<void>("save_onboarding_step", { step });
+export const setHotkeyTestMode = (enabled: boolean) =>
+  invoke<void>("set_hotkey_test_mode", { enabled });
+
+// Preset configurations for common providers
+export const STT_PRESETS = {
+  openai: {
+    provider: "openai_cloud" as const,
+    base_url: "https://api.openai.com/v1",
+    model: "whisper-1",
+  },
+  lm_studio: {
+    provider: "local_api" as const,
+    base_url: "http://localhost:1234/v1",
+    model: "whisper-large-v3",
+  },
+  local_whisper: {
+    provider: "local_api" as const,
+    base_url: "http://localhost:8080/v1",
+    model: "whisper-large-v3",
+  },
+};
+
+export const LLM_PRESETS = {
+  claude: {
+    provider: "claude" as const,
+    base_url: "https://api.anthropic.com",
+    model: "claude-haiku-4-5-20251001",
+  },
+  openai: {
+    provider: "openai_compatible" as const,
+    base_url: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
+  },
+  ollama: {
+    provider: "openai_compatible" as const,
+    base_url: "http://localhost:11434/v1",
+    model: "llama3.2",
+  },
+  lm_studio: {
+    provider: "openai_compatible" as const,
+    base_url: "http://localhost:1234/v1",
+    model: "loaded-model",
+  },
+};
