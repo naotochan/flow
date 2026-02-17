@@ -4,6 +4,16 @@
 
 A speech-to-text desktop app for macOS built with Tauri. Set up OpenAI, LM Studio, or faster-whisper-server to use your preferred STT engine.
 
+## Screenshots
+
+| Onboarding | General Settings | STT Engine |
+|:---:|:---:|:---:|
+| ![Onboarding](assets/onboarding_1.png) | ![Settings](assets/setting_hotkey.png) | ![STT](assets/setting_stt_engine.png) |
+
+| Post-processing | Test |
+|:---:|:---:|
+| ![LLM](assets/settting_postprocessing.png) | ![Test](assets/setting_test.png) |
+
 ## Features
 
 - **Any key as your record button** — Assign any key (or combination) as your recording hotkey
@@ -37,7 +47,7 @@ Download from the [Releases](../../releases) page (unsigned).
 ### Build from Source
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/whisper-dictation.git
+git clone https://github.com/naotochan/whisper-dictation.git
 cd whisper-dictation
 npm install
 npx tauri build --bundles app

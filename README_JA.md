@@ -4,6 +4,16 @@
 
 Tauri で作った Mac 用の Speech-to-text デスクトップアプリです。OpenAI や LM Studio，faster-whisper-server からお好きな物をセットアップすることで，一般的な STT が使えます。
 
+## スクリーンショット
+
+| オンボーディング | 一般設定 | 音声認識 |
+|:---:|:---:|:---:|
+| ![Onboarding](assets/onboarding_1.png) | ![Settings](assets/setting_hotkey.png) | ![STT](assets/setting_stt_engine.png) |
+
+| 後処理 | テスト |
+|:---:|:---:|
+| ![LLM](assets/settting_postprocessing.png) | ![Test](assets/setting_test.png) |
+
 ## Features
 
 - **好きなホットキーを録音ボタンに** — 任意のボタン（あるいは組み合わせ）を録音ボタンに割り当て可能です
@@ -39,7 +49,7 @@ Tauri で作った Mac 用の Speech-to-text デスクトップアプリです�
 ### ソースからビルド
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/whisper-dictation.git
+git clone https://github.com/naotochan/whisper-dictation.git
 cd whisper-dictation
 npm install
 npx tauri build --bundles app
