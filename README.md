@@ -20,6 +20,7 @@ A speech-to-text desktop app for macOS built with Tauri. Set up OpenAI, LM Studi
 - **Multiple STT backends** — OpenAI Whisper API / local faster-whisper / LM Studio
 - **LLM post-processing (optional)** — Use cloud AI services or a local LLM for text cleanup
 - **Fully local operation** — Runs entirely on-device with faster-whisper, no cloud needed
+- **Hallucination reduction** — Mitigates common faster-whisper hallucinations caused by noise (e.g. "Thank you for watching")
 
 ## Known Limitations
 
