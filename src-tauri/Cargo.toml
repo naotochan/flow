@@ -1,6 +1,6 @@
 [package]
 name = "whisper-dictation"
-version = "0.1.10"
+version = "0.1.12"
 description = "Desktop speech-to-text app with Whisper API"
 authors = ["you"]
 edition = "2021"
@@ -37,3 +37,4 @@ dirs = "5"
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-autostart = "2.5.1"
+tauri-plugin-single-instance = "2.4.0"
