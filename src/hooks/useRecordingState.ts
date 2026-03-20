@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-export type RecordingState = "idle" | "recording" | "processing";
+export type RecordingState = "idle" | "recording" | "processing" | "error";
 
 interface RecordingStatePayload {
   state: RecordingState;

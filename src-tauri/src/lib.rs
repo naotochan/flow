@@ -833,55 +833,106 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
     match event {
         hotkey::HotkeyEvent::RecordStart => {
             log::info!("Hotkey: RecordStart");
-            let _ = app_handle.emit(
-                "recording-state",
-                pipeline::RecordingStateEvent {
-                    state: "recording".to_string(),
-                },
-            );
-            set_overlay_visible(app_handle, true);
 
             let state = app_handle.state::<AppState>();
             let recorder = state.recorder.clone();
+            let settings_arc = state.settings.clone();
             let handle = app_handle.clone();
 
             tauri::async_runtime::spawn(async move {
-                let mut rec = recorder.lock().await;
-                if let Err(e) = rec.start() {
-                    log::error!("Failed to start recording: {}", e);
-                    let _ = handle.emit(
-                        "error",
-                        pipeline::ErrorEvent {
-                            message: format!("Failed to start recording: {}", e),
-                        },
-                    );
-                }
-            });
-
-            // Emit audio level events periodically while recording
-            // Extract atomic handles so we can poll WITHOUT locking the tokio::Mutex
-            let state2 = app_handle.state::<AppState>();
-            let recorder2 = state2.recorder.clone();
-            let handle2 = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                // Wait for recording to actually start, then grab atomic handles
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                let (is_recording_flag, peak_level_atomic) = {
-                    let rec = recorder2.lock().await;
-                    rec.atomic_handles()
+                // If using local model, check server availability before recording
+                let use_local_server = {
+                    let s = settings_arc.lock().await;
+                    s.stt.preset == "local_whisper"
                 };
-                // Poll lock-free using the atomics directly
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                    if !is_recording_flag.load(std::sync::atomic::Ordering::SeqCst) {
-                        break;
+
+                if use_local_server {
+                    let (host, port) = {
+                        let s = settings_arc.lock().await;
+                        (s.local_stt_server.host.clone(), s.local_stt_server.port)
+                    };
+                    let url = format!("http://{}:{}/health", host, port);
+                    let server_ok = reqwest::Client::new()
+                        .get(&url)
+                        .timeout(std::time::Duration::from_secs(1))
+                        .send()
+                        .await
+                        .map(|r| r.status().is_success())
+                        .unwrap_or(false);
+
+                    if !server_ok {
+                        log::warn!("Local STT server not running, aborting recording");
+                        let _ = handle.emit(
+                            "error",
+                            pipeline::ErrorEvent {
+                                message: "ローカルモデルのサーバーが起動していません\nLocal model server is not running".to_string(),
+                            },
+                        );
+                        let _ = handle.emit(
+                            "recording-state",
+                            pipeline::RecordingStateEvent {
+                                state: "error".to_string(),
+                            },
+                        );
+                        set_overlay_visible(&handle, true);
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        set_overlay_visible(&handle, false);
+                        let _ = handle.emit(
+                            "recording-state",
+                            pipeline::RecordingStateEvent {
+                                state: "idle".to_string(),
+                            },
+                        );
+                        return;
                     }
-                    let level = f32::from_bits(
-                        peak_level_atomic.swap(0, std::sync::atomic::Ordering::Relaxed),
-                    )
-                    .clamp(0.0, 1.0);
-                    let _ = handle2.emit("audio-level", AudioLevelEvent { level });
                 }
+
+                // Server OK (or not using local model) — show overlay and start recording
+                let _ = handle.emit(
+                    "recording-state",
+                    pipeline::RecordingStateEvent {
+                        state: "recording".to_string(),
+                    },
+                );
+                set_overlay_visible(&handle, true);
+
+                {
+                    let mut rec = recorder.lock().await;
+                    if let Err(e) = rec.start() {
+                        log::error!("Failed to start recording: {}", e);
+                        let _ = handle.emit(
+                            "error",
+                            pipeline::ErrorEvent {
+                                message: format!("Failed to start recording: {}", e),
+                            },
+                        );
+                        return;
+                    }
+                }
+
+                // Emit audio level events periodically while recording
+                let recorder2 = recorder.clone();
+                let handle2 = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Wait for recording to actually start, then grab atomic handles
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                    let (is_recording_flag, peak_level_atomic) = {
+                        let rec = recorder2.lock().await;
+                        rec.atomic_handles()
+                    };
+                    // Poll lock-free using the atomics directly
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        if !is_recording_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                            break;
+                        }
+                        let level = f32::from_bits(
+                            peak_level_atomic.swap(0, std::sync::atomic::Ordering::Relaxed),
+                        )
+                        .clamp(0.0, 1.0);
+                        let _ = handle2.emit("audio-level", AudioLevelEvent { level });
+                    }
+                });
             });
         }
         hotkey::HotkeyEvent::RecordStop => {
@@ -1002,6 +1053,9 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
+            // Second instance attempted to launch — just ignore it
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
