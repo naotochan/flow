@@ -7,6 +7,7 @@ const stateConfig: Record<
   idle: { label: "Ready", color: "bg-gray-600", pulse: false },
   recording: { label: "Recording...", color: "bg-red-500", pulse: true },
   processing: { label: "Processing...", color: "bg-yellow-500", pulse: true },
+  error: { label: "Error", color: "bg-red-700", pulse: false },
 };
 
 export function StatusIndicator() {
