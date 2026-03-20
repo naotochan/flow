@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build (aarch64)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --bundles app --target aarch64-apple-darwin
+
+      - name: Build (x86_64)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --bundles app --target x86_64-apple-darwin
+
+      - name: Prepare release assets
+        run: |
+          cp "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Whisper Dictation.app.tar.gz" "Whisper.Dictation_aarch64.app.tar.gz"
+          cp "src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Whisper Dictation.app.tar.gz" "Whisper.Dictation_x86_64.app.tar.gz"
+
+      - name: Generate latest.json
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SIG_AARCH64=$(cat "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Whisper Dictation.app.tar.gz.sig")
+          SIG_X86_64=$(cat "src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Whisper Dictation.app.tar.gz.sig")
+          cat > latest.json <<ENDJSON
+          {
+            "version": "${VERSION}",
+            "notes": "See https://github.com/naotochan/whisper-dictation/releases/tag/${GITHUB_REF_NAME}",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "url": "https://github.com/naotochan/whisper-dictation/releases/download/${GITHUB_REF_NAME}/Whisper.Dictation_aarch64.app.tar.gz",
+                "signature": "${SIG_AARCH64}"
+              },
+              "darwin-x86_64": {
+                "url": "https://github.com/naotochan/whisper-dictation/releases/download/${GITHUB_REF_NAME}/Whisper.Dictation_x86_64.app.tar.gz",
+                "signature": "${SIG_X86_64}"
+              }
+            }
+          }
+          ENDJSON
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: |
+            Whisper.Dictation_aarch64.app.tar.gz
+            Whisper.Dictation_x86_64.app.tar.gz
+            latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
