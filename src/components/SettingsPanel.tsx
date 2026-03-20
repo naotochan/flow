@@ -18,6 +18,8 @@ import {
 } from "../lib/ipc";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { useSettings } from "../hooks/useSettings";
 import { useRecordingState } from "../hooks/useRecordingState";
 import { OnboardingFlow } from "./OnboardingFlow";
@@ -941,15 +943,55 @@ function TestSection({ settings, lang }: { settings: AppSettings; lang: UILangua
 
 /* ─── Main Panel ─── */
 
+type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "downloading" | "ready" | "error";
+
 export function SettingsPanel() {
   const { settings, loading, saving, save } = useSettings();
   const [section, setSection] = useState<Section>("general");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [version, setVersion] = useState("");
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
+  const [updateVersion, setUpdateVersion] = useState("");
+  const updateRef = useRef<Awaited<ReturnType<typeof check>> | null>(null);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
+    // Silent auto-check on startup
+    checkForUpdate();
   }, []);
+
+  async function checkForUpdate() {
+    try {
+      setUpdateStatus("checking");
+      const update = await check();
+      if (update) {
+        setUpdateVersion(update.version);
+        setUpdateStatus("available");
+        updateRef.current = update;
+      } else {
+        setUpdateStatus("up-to-date");
+        setTimeout(() => setUpdateStatus("idle"), 3000);
+      }
+    } catch (e) {
+      console.error("Update check failed:", e);
+      setUpdateStatus("error");
+      setTimeout(() => setUpdateStatus("idle"), 3000);
+    }
+  }
+
+  async function downloadAndInstall() {
+    const update = updateRef.current;
+    if (!update) return;
+    try {
+      setUpdateStatus("downloading");
+      await update.downloadAndInstall();
+      setUpdateStatus("ready");
+    } catch (e) {
+      console.error("Update download failed:", e);
+      setUpdateStatus("error");
+      setTimeout(() => setUpdateStatus("idle"), 3000);
+    }
+  }
 
   if (loading || !settings) {
     return (
@@ -1061,7 +1103,53 @@ export function SettingsPanel() {
             ))}
           </div>
           {version && (
-            <p className="text-center text-[10px] text-slate-300 mt-1.5">v{version}</p>
+            <div className="mt-1.5 space-y-1">
+              <p className="text-center text-[10px] text-slate-300">v{version}</p>
+              {updateStatus === "idle" && (
+                <button
+                  onClick={checkForUpdate}
+                  className="w-full text-[10px] text-slate-400 hover:text-violet-500 transition-colors"
+                >
+                  {t(TS.updater.checkForUpdates, lang)}
+                </button>
+              )}
+              {updateStatus === "checking" && (
+                <p className="text-center text-[10px] text-slate-400 animate-pulse">
+                  {t(TS.updater.checking, lang)}
+                </p>
+              )}
+              {updateStatus === "up-to-date" && (
+                <p className="text-center text-[10px] text-emerald-500">
+                  {t(TS.updater.upToDate, lang)}
+                </p>
+              )}
+              {updateStatus === "available" && (
+                <button
+                  onClick={downloadAndInstall}
+                  className="w-full px-2 py-1 rounded-md text-[10px] font-medium bg-violet-100 text-violet-600 hover:bg-violet-200 transition-all"
+                >
+                  {(t(TS.updater.availableVersion, lang) as (v: string) => string)(updateVersion)}
+                </button>
+              )}
+              {updateStatus === "downloading" && (
+                <p className="text-center text-[10px] text-violet-500 animate-pulse">
+                  {t(TS.updater.downloading, lang)}
+                </p>
+              )}
+              {updateStatus === "ready" && (
+                <button
+                  onClick={() => relaunch()}
+                  className="w-full px-2 py-1 rounded-md text-[10px] font-medium bg-emerald-100 text-emerald-600 hover:bg-emerald-200 transition-all"
+                >
+                  {t(TS.updater.relaunch, lang)}
+                </button>
+              )}
+              {updateStatus === "error" && (
+                <p className="text-center text-[10px] text-red-400">
+                  {t(TS.updater.error, lang)}
+                </p>
+              )}
+            </div>
           )}
         </div>
       </aside>

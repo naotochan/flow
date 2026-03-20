@@ -201,6 +201,20 @@ const translations = {
           `Press ${key} (${mode}) to start recording.`,
       },
     },
+    updater: {
+      checkForUpdates: { ja: "アップデートを確認", en: "Check for Updates" },
+      checking: { ja: "確認中...", en: "Checking..." },
+      upToDate: { ja: "最新版です", en: "Up to date" },
+      availableVersion: {
+        ja: (v: string) => `v${v} が利用可能`,
+        en: (v: string) => `v${v} available`,
+      },
+      download: { ja: "ダウンロード", en: "Download" },
+      downloading: { ja: "ダウンロード中...", en: "Downloading..." },
+      readyToInstall: { ja: "インストール準備完了", en: "Ready to install" },
+      relaunch: { ja: "再起動して更新", en: "Relaunch to Update" },
+      error: { ja: "確認に失敗しました", en: "Check failed" },
+    },
   },
 } as const;
 
