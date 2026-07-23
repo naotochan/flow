@@ -36,7 +36,7 @@ import { useSettings } from "../hooks/useSettings";
 import { useRecordingState } from "../hooks/useRecordingState";
 import { OnboardingFlow } from "./OnboardingFlow";
 import { translations, t, UILanguage } from "../lib/i18n";
-import { formatHotkeyLabel, hotkeyFromEvent } from "../lib/hotkey";
+import { formatHotkeyLabel, hotkeyFromEvent, isEventTapHotkey } from "../lib/hotkey";
 import { applyAppearance } from "../lib/theme";
 import {
   AppMark,
@@ -919,6 +919,95 @@ function TranscriptionSection({
   );
 }
 
+function ModeHotkeyRow({
+  label,
+  value,
+  recordHotkey,
+  lang,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  recordHotkey: string;
+  lang: UILanguage;
+  onChange: (key: string | null) => void;
+}) {
+  const PP = TS.postProcessing;
+  const [capturing, setCapturing] = useState(false);
+  const [warn, setWarn] = useState("");
+
+  useEffect(() => {
+    if (!capturing) return;
+    const handler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code === "Escape") {
+        setCapturing(false);
+        setWarn("");
+        return;
+      }
+      const key = hotkeyFromEvent(e);
+      if (!key) return;
+      if (isEventTapHotkey(key)) {
+        setWarn(t(PP.modeHotkeyChordOnly, lang));
+        return;
+      }
+      if (key === recordHotkey) {
+        setWarn(t(PP.modeHotkeyChordOnly, lang));
+        return;
+      }
+      onChange(key);
+      setWarn("");
+      setCapturing(false);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [capturing, lang, onChange, recordHotkey]);
+
+  return (
+    <li className="space-y-0.5">
+      <div className="flex items-center gap-2">
+        <span className="w-16 flex-shrink-0 text-xs text-[var(--text-muted)]">
+          {label}
+        </span>
+        <button
+          type="button"
+          aria-label={`${label} hotkey`}
+          onClick={() => {
+            setWarn("");
+            setCapturing(true);
+          }}
+          className={`flex-1 min-w-0 px-2.5 py-1.5 rounded-md text-xs font-medium text-left transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
+            capturing
+              ? "bg-[var(--accent-soft)] text-[var(--accent-text)] ring-2 ring-[var(--accent-ring)]"
+              : "bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text)] hover:border-[var(--accent)]"
+          }`}
+        >
+          {capturing
+            ? t(TS.general.pressAKey, lang)
+            : value
+              ? formatHotkeyLabel(value)
+              : t(PP.modeHotkeyUnset, lang)}
+        </button>
+        {value && !capturing && (
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            className="flex-shrink-0 text-[11px] text-[var(--text-muted)] hover:text-[var(--danger)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] rounded"
+          >
+            {t(PP.modeHotkeyClear, lang)}
+          </button>
+        )}
+      </div>
+      {warn && (
+        <p className="pl-[4.5rem] text-[10px] text-[var(--danger)]" role="alert">
+          {warn}
+        </p>
+      )}
+    </li>
+  );
+}
+
 function PostProcessingSection({
   settings,
   update,
@@ -964,6 +1053,18 @@ function PostProcessingSection({
     update({ modes: next });
   };
 
+  const modeHotkeys = settings.mode_hotkeys ?? {};
+
+  const setModeHotkey = (id: PostProcessModeId, key: string | null) => {
+    const next = { ...modeHotkeys };
+    if (!key) {
+      delete next[id];
+    } else {
+      next[id] = key;
+    }
+    update({ mode_hotkeys: next });
+  };
+
   return (
     <div className="space-y-5">
       <div className="space-y-2">
@@ -997,6 +1098,23 @@ function PostProcessingSection({
         <p className="text-[11px] text-[var(--text-faint)] leading-relaxed">
           {t(PP.modeDesc[modeId], lang)}
         </p>
+      </div>
+
+      <div className="space-y-2">
+        <FieldLabel>{t(PP.modeHotkeys, lang)}</FieldLabel>
+        <FieldHint>{t(PP.modeHotkeysHint, lang)}</FieldHint>
+        <ul className="space-y-1.5">
+          {POST_PROCESS_MODE_IDS.map((id) => (
+            <ModeHotkeyRow
+              key={id}
+              label={t(PP.modes[id], lang)}
+              value={modeHotkeys[id] || ""}
+              recordHotkey={settings.hotkey.key}
+              lang={lang}
+              onChange={(key) => setModeHotkey(id, key)}
+            />
+          ))}
+        </ul>
       </div>
 
       {useLlm && (
