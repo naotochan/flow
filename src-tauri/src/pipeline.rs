@@ -245,14 +245,26 @@ pub async fn handle_recording_complete(
 
     // 7. Resize overlay and emit transcription result for display.
     resize_overlay_for_result(app_handle);
+    let language_label = language.unwrap_or("auto").to_string();
     let _ = app_handle.emit(
         "transcription-result",
         TranscriptionResultEvent {
             text: final_text.clone(),
             raw_text: raw_text.clone(),
-            language: language.unwrap_or("auto").to_string(),
+            language: language_label.clone(),
         },
     );
+
+    // Persist to recognition history (best-effort).
+    match crate::history::push_entry(&final_text, &raw_text, &language_label) {
+        Ok(entry) => {
+            let _ = app_handle.emit("history-updated", entry);
+            if let Err(e) = crate::tray::menu::rebuild_tray_menu(app_handle) {
+                log::warn!("Failed to refresh tray history menu: {}", e);
+            }
+        }
+        Err(e) => log::warn!("Failed to save history: {}", e),
+    }
 
     // 8. Return to idle
     let _ = app_handle.emit(

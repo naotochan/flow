@@ -1,5 +1,28 @@
 import type { ReactNode } from "react";
 
+/** Fennec mark — rounded square matching macOS app icon treatment. */
+export function AppMark({
+  size = 28,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  const radius = Math.max(6, Math.round(size * 0.22));
+  return (
+    <img
+      src="/app-icon.png"
+      alt=""
+      width={size}
+      height={size}
+      draggable={false}
+      className={`flex-shrink-0 object-cover app-mark ${className}`}
+      style={{ width: size, height: size, borderRadius: radius }}
+      aria-hidden="true"
+    />
+  );
+}
+
 export function FieldLabel({
   htmlFor,
   children,

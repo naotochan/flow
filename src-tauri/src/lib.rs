@@ -2,6 +2,7 @@ mod api;
 mod audio;
 mod clipboard;
 mod config;
+mod history;
 mod hotkey;
 mod pipeline;
 mod tray;
@@ -532,6 +533,47 @@ fn get_build_number() -> String {
     option_env!("WD_BUILD_NUMBER")
         .unwrap_or("0")
         .to_string()
+}
+
+#[tauri::command]
+fn get_history() -> Result<Vec<history::HistoryEntry>, String> {
+    history::load_history().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_history(app: tauri::AppHandle) -> Result<(), String> {
+    history::clear_history().map_err(|e| e.to_string())?;
+    let _ = app.emit("history-updated", ());
+    if let Err(e) = tray::menu::rebuild_tray_menu(&app) {
+        log::warn!("Failed to refresh tray history menu: {}", e);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_history_entry(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    history::delete_entry(&id).map_err(|e| e.to_string())?;
+    let _ = app.emit("history-updated", ());
+    if let Err(e) = tray::menu::rebuild_tray_menu(&app) {
+        log::warn!("Failed to refresh tray history menu: {}", e);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn copy_history_text(text: String) -> Result<(), String> {
+    clipboard::paste::copy_text(&text).map_err(|e| e.to_string())
+}
+
+/// Hide settings, then paste into the previously focused app.
+#[tauri::command]
+fn paste_history_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.hide();
+    }
+    // Give focus time to return to the previous app.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    clipboard::paste::copy_and_paste(&text).map_err(|e| e.to_string())
 }
 
 /// Hayate-style window / sidebar label: `Whisper Dictation (0.2.3 · build 203)`.
@@ -1228,6 +1270,11 @@ pub fn run() {
             save_onboarding_step,
             set_hotkey_test_mode,
             get_build_number,
+            get_history,
+            clear_history,
+            delete_history_entry,
+            copy_history_text,
+            paste_history_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -151,7 +151,28 @@ const translations = {
       general: { ja: "一般", en: "General" },
       transcription: { ja: "音声認識", en: "Transcription" },
       postProcessing: { ja: "後処理", en: "Post-Processing" },
+      history: { ja: "履歴", en: "History" },
       test: { ja: "テスト", en: "Test" },
+    },
+    history: {
+      empty: {
+        ja: "まだ認識履歴がありません。ホットキーで録音するとここに残ります。",
+        en: "No recognition history yet. Dictations will appear here.",
+      },
+      copy: { ja: "コピー", en: "Copy" },
+      paste: { ja: "ペースト", en: "Paste" },
+      delete: { ja: "削除", en: "Delete" },
+      clearAll: { ja: "すべて削除", en: "Clear All" },
+      clearConfirm: {
+        ja: "履歴をすべて削除しますか？",
+        en: "Clear all history?",
+      },
+      copied: { ja: "コピーしました", en: "Copied" },
+      rawLabel: { ja: "原文", en: "Raw" },
+      pasteHint: {
+        ja: "ペーストすると設定ウィンドウが閉じ、直前のアプリに貼り付けます。",
+        en: "Paste hides Settings and pastes into the previously focused app.",
+      },
     },
     general: {
       activationMode: { ja: "起動方式", en: "Activation Mode" },

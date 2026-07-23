@@ -25,7 +25,7 @@ import { useRecordingState } from "../hooks/useRecordingState";
 import { translations, t, UILanguage } from "../lib/i18n";
 import { formatHotkeyLabel, hotkeyFromEvent } from "../lib/hotkey";
 import { applyAppearance } from "../lib/theme";
-import { FieldLabel, SegmentedControl, inputClass, monoInputClass } from "./ui";
+import { AppMark, FieldLabel, SegmentedControl, inputClass, monoInputClass } from "./ui";
 
 const T = translations.onboarding;
 const G = translations.settings.general;
@@ -58,10 +58,10 @@ function StepWelcome({ lang }: { lang: UILanguage }) {
   return (
     <div className="space-y-5">
       <div className="text-center">
-        <div className="inline-flex items-center justify-center w-16 h-16 mb-4">
-          <img src="/app-icon.png" alt="Whisper Dictation" width={64} height={64} className="w-16 h-16" />
+        <div className="inline-flex items-center justify-center mb-5">
+          <AppMark size={72} />
         </div>
-        <h3 className="text-xl font-semibold text-[var(--text)] mb-2 text-pretty">
+        <h3 className="text-xl font-semibold text-[var(--text)] mb-2 text-pretty tracking-tight">
           {t(W.title, lang)}
         </h3>
         <p className="text-sm text-[var(--text-muted)] leading-relaxed">
