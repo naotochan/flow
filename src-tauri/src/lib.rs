@@ -104,6 +104,10 @@ pub struct AppState {
     pub hotkey_test_mode: Arc<std::sync::atomic::AtomicBool>,
     /// Previous clipboard text to restore after a replace-selection session.
     pub clipboard_backup: Arc<std::sync::Mutex<Option<String>>>,
+    /// True between RecordStart commit and stop/cancel (incl. async startup).
+    pub recording_session: Arc<std::sync::atomic::AtomicBool>,
+    /// Set by Escape cancel; RecordStart checks this after awaits.
+    pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[tauri::command]
@@ -644,6 +648,7 @@ fn unregister_hotkeys(app: &tauri::AppHandle) {
 
     // Tear down CGEventTap (no-op if none installed)
     hotkey::rshift::uninstall_key_listener();
+    hotkey::rshift::uninstall_cancel_listener();
 
     // Unregister all global shortcuts
     let _ = app.global_shortcut().unregister_all();
@@ -695,6 +700,12 @@ fn register_hotkeys(app: &tauri::AppHandle, hotkey_str: &str) {
 
         log::info!("Global shortcut registered: {}", shortcut_str);
     }
+
+    // Escape cancels an in-progress recording (listen-only; does not swallow Esc).
+    let cancel_handle = app.clone();
+    hotkey::rshift::install_cancel_listener(move || {
+        handle_hotkey_event(&cancel_handle, hotkey::HotkeyEvent::RecordCancel);
+    });
 }
 
 /// Tear down old hotkeys, update detector mode, and re-register.
@@ -919,6 +930,7 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
             hotkey::HotkeyEvent::RecordStop => {
                 let _ = app_handle.emit("hotkey-detected", "released");
             }
+            hotkey::HotkeyEvent::RecordCancel => {}
         }
         return;
     }
@@ -928,12 +940,30 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
             log::info!("Hotkey: RecordStart");
 
             let state = app_handle.state::<AppState>();
+            // Ignore if a session is already active (e.g. double-fire)
+            if state
+                .recording_session
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                log::info!("RecordStart ignored — session already active");
+                return;
+            }
+            state
+                .cancel_requested
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+
             let recorder = state.recorder.clone();
             let settings_arc = state.settings.clone();
             let clipboard_backup = state.clipboard_backup.clone();
+            let cancel_requested = state.cancel_requested.clone();
+            let recording_session = state.recording_session.clone();
             let handle = app_handle.clone();
 
             tauri::async_runtime::spawn(async move {
+                let abort_if_cancelled = || {
+                    cancel_requested.load(std::sync::atomic::Ordering::SeqCst)
+                };
+
                 // If using local model, check server availability before recording
                 let use_local_server = {
                     let s = settings_arc.lock().await;
@@ -954,8 +984,14 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                         .map(|r| r.status().is_success())
                         .unwrap_or(false);
 
+                    if abort_if_cancelled() {
+                        recording_session.store(false, std::sync::atomic::Ordering::SeqCst);
+                        return;
+                    }
+
                     if !server_ok {
                         log::warn!("Local STT server not running, aborting recording");
+                        recording_session.store(false, std::sync::atomic::Ordering::SeqCst);
                         let _ = handle.emit(
                             "error",
                             pipeline::ErrorEvent {
@@ -979,6 +1015,11 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                         );
                         return;
                     }
+                }
+
+                if abort_if_cancelled() {
+                    recording_session.store(false, std::sync::atomic::Ordering::SeqCst);
+                    return;
                 }
 
                 // Optional: capture selection (Cmd+C) BEFORE showing overlay,
@@ -1013,6 +1054,12 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                     }
                 }
 
+                if abort_if_cancelled() {
+                    pipeline::restore_clipboard_backup(&handle);
+                    recording_session.store(false, std::sync::atomic::Ordering::SeqCst);
+                    return;
+                }
+
                 // Server OK (or not using local model) — show overlay and start recording
                 let _ = handle.emit(
                     "recording-state",
@@ -1026,6 +1073,7 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                     let mut rec = recorder.lock().await;
                     if let Err(e) = rec.start() {
                         log::error!("Failed to start recording: {}", e);
+                        recording_session.store(false, std::sync::atomic::Ordering::SeqCst);
                         pipeline::restore_clipboard_backup(&handle);
                         let _ = handle.emit(
                             "error",
@@ -1033,8 +1081,32 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                                 message: format!("Failed to start recording: {}", e),
                             },
                         );
+                        set_overlay_visible(&handle, false);
+                        let _ = handle.emit(
+                            "recording-state",
+                            pipeline::RecordingStateEvent {
+                                state: "idle".to_string(),
+                            },
+                        );
                         return;
                     }
+                }
+
+                if abort_if_cancelled() {
+                    {
+                        let mut rec = recorder.lock().await;
+                        rec.cancel();
+                    }
+                    pipeline::restore_clipboard_backup(&handle);
+                    set_overlay_visible(&handle, false);
+                    let _ = handle.emit(
+                        "recording-state",
+                        pipeline::RecordingStateEvent {
+                            state: "idle".to_string(),
+                        },
+                    );
+                    recording_session.store(false, std::sync::atomic::Ordering::SeqCst);
+                    return;
                 }
 
                 // Emit audio level events periodically while recording
@@ -1066,6 +1138,21 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
             log::info!("Hotkey: RecordStop");
 
             let state = app_handle.state::<AppState>();
+            // Cancelled session — discard stop so we don't run STT on empty/partial audio
+            if state
+                .cancel_requested
+                .load(std::sync::atomic::Ordering::SeqCst)
+                || !state
+                    .recording_session
+                    .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                log::info!("RecordStop ignored — no active session (cancelled or idle)");
+                return;
+            }
+            state
+                .recording_session
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+
             let recorder = state.recorder.clone();
             let settings = state.settings.clone();
             let handle = app_handle.clone();
@@ -1107,6 +1194,54 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                     // Hide overlay on error (success case handled in pipeline.rs)
                     set_overlay_visible(&handle, false);
                 }
+            });
+        }
+        hotkey::HotkeyEvent::RecordCancel => {
+            let state = app_handle.state::<AppState>();
+            let detector_recording = state
+                .detector
+                .lock()
+                .map(|d| d.is_recording())
+                .unwrap_or(false);
+            let session_active = state
+                .recording_session
+                .load(std::sync::atomic::Ordering::SeqCst);
+
+            if !session_active && !detector_recording {
+                // Not in a recording session — leave Escape alone for other apps
+                return;
+            }
+
+            log::info!("Hotkey: RecordCancel");
+            state
+                .cancel_requested
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            state
+                .recording_session
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            if let Ok(mut detector) = state.detector.lock() {
+                detector.cancel_recording();
+            }
+
+            let recorder = state.recorder.clone();
+            let handle = app_handle.clone();
+
+            tauri::async_runtime::spawn(async move {
+                {
+                    let mut rec = recorder.lock().await;
+                    if rec.is_recording() {
+                        rec.cancel();
+                    }
+                }
+                pipeline::restore_clipboard_backup(&handle);
+                set_overlay_visible(&handle, false);
+                let _ = handle.emit(
+                    "recording-state",
+                    pipeline::RecordingStateEvent {
+                        state: "idle".to_string(),
+                    },
+                );
+                log::info!("Recording cancelled by user");
             });
         }
     }
@@ -1214,6 +1349,8 @@ pub fn run() {
         hotkeys_initialized: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         hotkey_test_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         clipboard_backup: Arc::new(std::sync::Mutex::new(None)),
+        recording_session: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     tauri::Builder::default()
