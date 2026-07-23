@@ -92,6 +92,8 @@ export interface AppSettings {
   history_enabled: boolean;
   /** @default 0 — auto-delete after N days; 0 = keep until max count */
   history_retention_days: number;
+  /** Optional mode → hotkey map (e.g. `{ email: "ctrl+1" }`) */
+  mode_hotkeys: Record<string, string>;
 }
 
 export const getSettings = () => invoke<AppSettings>("get_settings");

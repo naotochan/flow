@@ -110,3 +110,23 @@ Claude / OpenAI / Ollama / LM Studio による LLM ポスト処理を備える�
 
 ### 気づき・メモ
 - OpenRouter は既存 openai_compatible パスで足りる。モデルは `provider/model` 形式
+
+---
+
+## 2026-07-24 07:30
+
+### 完了したこと
+- OpenRouter を main にマージ（PR #8）
+- **モード用ホットキー** 実装（`feat/mode-hotkeys`）
+  - `mode_hotkeys` マップ（例: email → ctrl+1）
+  - 押下でモード切替のみ（録音しない）
+  - 設定 → 後処理に割当 UI
+  - 単独修飾キーは不可（録音用 EventTap と分離）
+- Flow **v1.5.0** (build **305**) ※オンボーディング／venv は触らずインストール
+
+### 次のステップ
+- モードホットキー確認 → PR / main
+- 続けて **直前ペースト取消**
+
+### 気づき・メモ
+- ビルド後のセットアップリセットはしない方針に変更済み

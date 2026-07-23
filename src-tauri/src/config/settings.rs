@@ -39,6 +39,10 @@ pub struct AppSettings {
     /// Auto-delete entries older than this many days. `0` = keep until max count.
     #[serde(default)]
     pub history_retention_days: u32,
+    /// Optional global shortcuts per mode id (e.g. `"email" → "ctrl+1"`).
+    /// Chord / function keys only (no standalone modifiers — those need EventTap).
+    #[serde(default)]
+    pub mode_hotkeys: std::collections::HashMap<String, String>,
 }
 
 /// One LLM post-processing mode (prompt preset).
@@ -368,6 +372,7 @@ impl Default for AppSettings {
             modes: default_modes(),
             history_enabled: true,
             history_retention_days: 0,
+            mode_hotkeys: std::collections::HashMap::new(),
         }
     }
 }
