@@ -1,10 +1,21 @@
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder, MenuItem},
+    menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder},
     AppHandle, Emitter, Manager,
 };
 
+use crate::config;
+use crate::AppState;
+
 const TRAY_RECENT_COUNT: usize = 8;
 const TRAY_LABEL_MAX: usize = 40;
+
+const MODE_ORDER: &[(&str, &str)] = &[
+    ("raw", "Raw"),
+    ("format", "Format"),
+    ("email", "Email"),
+    ("translate", "Translate"),
+    ("code", "Code"),
+];
 
 fn truncate_label(text: &str) -> String {
     let trimmed = text.trim().replace('\n', " ");
@@ -19,11 +30,31 @@ fn truncate_label(text: &str) -> String {
     }
 }
 
-/// Rebuild tray menu from current history. Safe to call after each recognition.
+/// Rebuild tray menu from current settings + history. Safe to call after each recognition.
 pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let active_mode = app
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .settings
+                .try_lock()
+                .ok()
+                .map(|s| s.active_mode_id.clone())
+        })
+        .unwrap_or_else(|| "format".to_string());
+
     let settings_item = MenuItemBuilder::with_id("settings", "Settings...").build(app)?;
     let history_item = MenuItemBuilder::with_id("history", "History...").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+
+    let mode_items: Vec<CheckMenuItem<tauri::Wry>> = MODE_ORDER
+        .iter()
+        .map(|(id, label)| {
+            CheckMenuItemBuilder::with_id(format!("mode:{id}"), *label)
+                .checked(active_mode == *id)
+                .build(app)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let recent = crate::history::load_history().unwrap_or_default();
     let recent_items: Vec<MenuItem<tauri::Wry>> = recent
@@ -37,7 +68,12 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
 
     let mut builder = MenuBuilder::new(app)
         .item(&settings_item)
-        .item(&history_item);
+        .item(&history_item)
+        .separator();
+
+    for item in &mode_items {
+        builder = builder.item(item);
+    }
 
     if !recent_items.is_empty() {
         builder = builder.separator();
@@ -53,6 +89,35 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
     }
 
     Ok(())
+}
+
+fn set_active_mode(app: &AppHandle, mode_id: &str) {
+    let mode_id = mode_id.to_string();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        let mut settings = state.settings.lock().await;
+        if !settings.modes.iter().any(|m| m.id == mode_id)
+            && !config::default_modes().iter().any(|m| m.id == mode_id)
+        {
+            log::warn!("Unknown mode id from tray: {}", mode_id);
+            return;
+        }
+        settings.active_mode_id = mode_id.clone();
+        config::normalize_modes(&mut settings);
+        if let Err(e) = config::save_settings(&settings) {
+            log::warn!("Failed to save mode from tray: {}", e);
+            return;
+        }
+        drop(settings);
+        log::info!("Active mode set from tray: {}", mode_id);
+        if let Err(e) = rebuild_tray_menu(&app) {
+            log::warn!("Failed to rebuild tray after mode change: {}", e);
+        }
+        let _ = app.emit("settings-changed", ());
+    });
 }
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
@@ -78,6 +143,10 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "quit" => {
                     app.exit(0);
+                }
+                other if other.starts_with("mode:") => {
+                    let mode_id = &other["mode:".len()..];
+                    set_active_mode(app, mode_id);
                 }
                 other if other.starts_with("history-copy:") => {
                     let entry_id = &other["history-copy:".len()..];
