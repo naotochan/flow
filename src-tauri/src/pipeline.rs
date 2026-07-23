@@ -4,6 +4,31 @@ use crate::api::{claude, whisper};
 use crate::audio;
 use crate::clipboard;
 use crate::config::{AppSettings, LanguageMode};
+use crate::AppState;
+
+/// Restore clipboard text saved at the start of a replace-selection session.
+pub fn restore_clipboard_backup(app_handle: &AppHandle) {
+    let backup = {
+        let state = app_handle.state::<AppState>();
+        let taken = match state.clipboard_backup.lock() {
+            Ok(mut g) => g.take(),
+            Err(_) => None,
+        };
+        taken
+    };
+    if backup.is_none() {
+        return;
+    }
+    let handle = app_handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        if let Err(e) = clipboard::paste::restore_clipboard(backup.as_deref()) {
+            log::warn!("Clipboard restore failed: {}", e);
+        } else {
+            log::info!("Clipboard restored after replace-selection session");
+        }
+    });
+}
 
 /// Hide the overlay window and reset its size.
 fn hide_overlay(app_handle: &AppHandle) {
@@ -132,6 +157,7 @@ pub async fn handle_recording_complete(
     app_handle: &AppHandle,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if audio_samples.is_empty() {
+        restore_clipboard_backup(app_handle);
         return Ok(());
     }
 
@@ -139,6 +165,7 @@ pub async fn handle_recording_complete(
     let rms = (audio_samples.iter().map(|s| s * s).sum::<f32>() / audio_samples.len() as f32).sqrt();
     if rms < SILENCE_RMS_THRESHOLD {
         log::info!("Audio too quiet (RMS={:.5}), skipping STT", rms);
+        restore_clipboard_backup(app_handle);
         hide_overlay(app_handle);
         let _ = app_handle.emit(
             "recording-state",
@@ -177,6 +204,7 @@ pub async fn handle_recording_complete(
     // Check for hallucination or empty result
     if is_hallucination(&raw_text) {
         log::info!("Filtered hallucination: '{}'", raw_text.trim());
+        restore_clipboard_backup(app_handle);
         hide_overlay(app_handle);
         let _ = app_handle.emit(
             "recording-state",
@@ -188,6 +216,7 @@ pub async fn handle_recording_complete(
     }
 
     if raw_text.trim().is_empty() {
+        restore_clipboard_backup(app_handle);
         hide_overlay(app_handle);
         let _ = app_handle.emit(
             "recording-state",
@@ -235,7 +264,11 @@ pub async fn handle_recording_complete(
     // afterwards would land in the overlay instead of where the user is
     // typing. Pasting first avoids that race entirely.
     // (Must run on the main thread for macOS enigo/HIToolbox.)
-    if settings.auto_paste {
+    //
+    // replace_selection implies paste even if auto_paste is off (otherwise
+    // the captured selection would be left on the clipboard unused).
+    let should_paste = settings.auto_paste || settings.replace_selection;
+    if should_paste {
         let text_for_paste = final_text.clone();
         let handle = app_handle.clone();
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
@@ -256,6 +289,9 @@ pub async fn handle_recording_complete(
             })?
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     }
+
+    // Restore the user's prior clipboard (best-effort) after paste settles.
+    restore_clipboard_backup(app_handle);
 
     // 7. Resize overlay and emit transcription result for display.
     resize_overlay_for_result(app_handle);
