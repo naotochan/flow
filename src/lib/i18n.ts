@@ -152,7 +152,29 @@ const translations = {
       transcription: { ja: "音声認識", en: "Transcription" },
       postProcessing: { ja: "後処理", en: "Post-Processing" },
       history: { ja: "履歴", en: "History" },
+      dictionary: { ja: "辞書", en: "Dictionary" },
       test: { ja: "テスト", en: "Test" },
+    },
+    dictionary: {
+      hint: {
+        ja: "認識結果（LLM後処理のあと）に適用されます。長いフレーズから優先して置換します。",
+        en: "Applied after recognition (and LLM, if on). Longer phrases win first.",
+      },
+      from: { ja: "認識された語", en: "Spoken / recognized" },
+      to: { ja: "置換後", en: "Replace with" },
+      fromPlaceholder: { ja: "例: なると", en: "e.g. naruto" },
+      toPlaceholder: { ja: "例: ナルト", en: "e.g. Naruto" },
+      add: { ja: "追加", en: "Add" },
+      empty: {
+        ja: "まだ辞書がありません。固有名詞や言い間違いの置換を追加できます。",
+        en: "No entries yet. Add proper nouns or misheard phrases.",
+      },
+      enabled: { ja: "有効", en: "On" },
+      delete: { ja: "削除", en: "Delete" },
+      saveError: {
+        ja: "「認識された語」を入力してください。",
+        en: "Enter the phrase to replace.",
+      },
     },
     history: {
       empty: {

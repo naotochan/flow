@@ -59,7 +59,7 @@ function StepWelcome({ lang }: { lang: UILanguage }) {
     <div className="space-y-5">
       <div className="text-center">
         <div className="inline-flex items-center justify-center mb-5">
-          <AppMark size={72} />
+          <AppMark size={72} variant="ghost" />
         </div>
         <h3 className="text-xl font-semibold text-[var(--text)] mb-2 text-pretty tracking-tight">
           {t(W.title, lang)}
@@ -630,8 +630,7 @@ function StepTest({ settings, lang }: { settings: AppSettings; lang: UILanguage 
     };
   }, [settings.stt.preset, settings.local_stt_server.port, settings.local_stt_server.host]);
 
-  const sttLang = settings.language.mode || "english";
-  const sampleText = SAMPLE_TEXT[sttLang] || SAMPLE_TEXT.english;
+  const sampleText = lang === "ja" ? SAMPLE_TEXT.japanese : SAMPLE_TEXT.english;
   const hotkeyLabel = formatHotkeyLabel(settings.hotkey.key);
   const waitingForServer = settings.stt.preset === "local_whisper" && serverStatus === "starting";
 
