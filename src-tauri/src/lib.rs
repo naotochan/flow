@@ -243,7 +243,7 @@ async fn test_microphone_stt(state: tauri::State<'_, AppState>) -> Result<SttTes
     }
 
     // 4. LLM post-processing (if enabled)
-    let processed_text = if settings.llm.enabled {
+    let mut processed_text = if settings.llm.enabled {
         let lang_str = language.unwrap_or(&settings.language.primary);
         match api::claude::post_process(&raw_text, &settings.llm, lang_str).await {
             Ok(processed) => Some(processed),
@@ -255,6 +255,13 @@ async fn test_microphone_stt(state: tauri::State<'_, AppState>) -> Result<SttTes
     } else {
         None
     };
+
+    // 5. Apply replacement dictionary (same order as live pipeline).
+    let after_llm = processed_text.as_deref().unwrap_or(&raw_text);
+    let replaced = config::apply_replacements(after_llm, &settings.replacements);
+    if replaced != after_llm {
+        processed_text = Some(replaced);
+    }
 
     Ok(SttTestResult {
         raw_text,

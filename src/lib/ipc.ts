@@ -38,6 +38,13 @@ export interface LocalSttServerConfig {
 
 export type AppAppearance = "system" | "light" | "dark";
 
+export interface ReplacementRule {
+  id: string;
+  from: string;
+  to: string;
+  enabled: boolean;
+}
+
 export interface AppSettings {
   stt: SttConfig;
   llm: LlmConfig;
@@ -51,6 +58,8 @@ export interface AppSettings {
   ui_language: "ja" | "en";
   /** @default "system" */
   appearance: AppAppearance;
+  /** @default [] */
+  replacements: ReplacementRule[];
 }
 
 export const getSettings = () => invoke<AppSettings>("get_settings");

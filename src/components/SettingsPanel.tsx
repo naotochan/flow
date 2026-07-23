@@ -23,6 +23,7 @@ import {
   copyHistoryText,
   pasteHistoryText,
   HistoryEntry,
+  ReplacementRule,
 } from "../lib/ipc";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
@@ -46,7 +47,224 @@ import {
 
 const TS = translations.settings;
 
-type Section = "general" | "transcription" | "post_processing" | "history" | "test";
+type Section =
+  | "general"
+  | "transcription"
+  | "post_processing"
+  | "dictionary"
+  | "history"
+  | "test";
+
+function newRuleId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `r-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function DictionaryRuleRow({
+  rule,
+  lang,
+  onCommit,
+  onToggle,
+  onDelete,
+}: {
+  rule: ReplacementRule;
+  lang: UILanguage;
+  onCommit: (id: string, from: string, to: string) => void;
+  onToggle: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const D = TS.dictionary;
+  const [from, setFrom] = useState(rule.from);
+  const [to, setTo] = useState(rule.to);
+
+  useEffect(() => {
+    setFrom(rule.from);
+    setTo(rule.to);
+  }, [rule.from, rule.to]);
+
+  const commit = () => {
+    const nextFrom = from.trim();
+    const nextTo = to;
+    if (nextFrom === rule.from && nextTo === rule.to) return;
+    if (!nextFrom) {
+      setFrom(rule.from);
+      return;
+    }
+    onCommit(rule.id, nextFrom, nextTo);
+  };
+
+  return (
+    <li
+      className={`bg-[var(--bg-muted)] border border-[var(--border)] rounded-xl px-3 py-2.5 space-y-2 ${
+        rule.enabled ? "" : "opacity-60"
+      }`}
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] gap-2 items-center">
+        <input
+          type="text"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+          onBlur={commit}
+          aria-label={t(D.from, lang)}
+          className={inputClass}
+        />
+        <span className="hidden sm:inline text-[var(--text-faint)] text-xs text-center px-1">
+          →
+        </span>
+        <input
+          type="text"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          onBlur={commit}
+          aria-label={t(D.to, lang)}
+          className={inputClass}
+        />
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <label className="flex items-center gap-2 text-[11px] text-[var(--text-muted)] cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={rule.enabled}
+            onChange={() => onToggle(rule.id)}
+            className="rounded border-[var(--border)]"
+          />
+          {t(D.enabled, lang)}
+        </label>
+        <button
+          type="button"
+          onClick={() => onDelete(rule.id)}
+          className="px-2.5 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:text-[var(--danger)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+        >
+          {t(D.delete, lang)}
+        </button>
+      </div>
+    </li>
+  );
+}
+
+function DictionarySection({
+  settings,
+  update,
+  lang,
+}: {
+  settings: AppSettings;
+  update: (p: Partial<AppSettings>) => void;
+  lang: UILanguage;
+}) {
+  const D = TS.dictionary;
+  const rules = settings.replacements ?? [];
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [error, setError] = useState("");
+
+  const persist = (next: ReplacementRule[]) => {
+    update({ replacements: next });
+  };
+
+  const onAdd = () => {
+    const trimmedFrom = from.trim();
+    if (!trimmedFrom) {
+      setError(t(D.saveError, lang));
+      return;
+    }
+    setError("");
+    persist([
+      {
+        id: newRuleId(),
+        from: trimmedFrom,
+        to: to.trim(),
+        enabled: true,
+      },
+      ...rules,
+    ]);
+    setFrom("");
+    setTo("");
+  };
+
+  const onToggle = (id: string) => {
+    persist(
+      rules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)),
+    );
+  };
+
+  const onCommit = (id: string, nextFrom: string, nextTo: string) => {
+    persist(
+      rules.map((r) =>
+        r.id === id ? { ...r, from: nextFrom, to: nextTo } : r,
+      ),
+    );
+  };
+
+  const onDelete = (id: string) => {
+    persist(rules.filter((r) => r.id !== id));
+  };
+
+  return (
+    <div className="space-y-4">
+      <FieldHint>{t(D.hint, lang)}</FieldHint>
+
+      <div className="bg-[var(--bg-muted)] border border-[var(--border)] rounded-xl p-3 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <FieldLabel>{t(D.from, lang)}</FieldLabel>
+            <input
+              type="text"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onAdd();
+              }}
+              placeholder={t(D.fromPlaceholder, lang)}
+              className={inputClass}
+            />
+          </div>
+          <div className="space-y-1">
+            <FieldLabel>{t(D.to, lang)}</FieldLabel>
+            <input
+              type="text"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onAdd();
+              }}
+              placeholder={t(D.toPlaceholder, lang)}
+              className={inputClass}
+            />
+          </div>
+        </div>
+        {error && <p className="text-[11px] text-[var(--danger)]">{error}</p>}
+        <button
+          type="button"
+          onClick={onAdd}
+          className="px-3 py-1.5 rounded-lg text-sm font-medium bg-[var(--accent-soft)] text-[var(--accent-text)] hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+        >
+          {t(D.add, lang)}
+        </button>
+      </div>
+
+      {rules.length === 0 ? (
+        <p className="text-sm text-[var(--text-muted)] bg-[var(--bg-muted)] border border-[var(--border)] rounded-lg px-3 py-4">
+          {t(D.empty, lang)}
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {rules.map((rule) => (
+            <DictionaryRuleRow
+              key={rule.id}
+              rule={rule}
+              lang={lang}
+              onCommit={onCommit}
+              onToggle={onToggle}
+              onDelete={onDelete}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function HotkeyCapture({
   settings,
@@ -145,7 +363,7 @@ function GeneralSection({
   return (
     <div className="space-y-6">
       <SettingsRow title={t(G.appearance, lang)} description={t(G.appearanceHint, lang)}>
-        <div className="min-w-[220px]">
+        <div className="min-w-[240px]">
           <SegmentedControl
             ariaLabel={t(G.appearance, lang)}
             value={appearance}
@@ -955,8 +1173,10 @@ function HistorySection({ lang }: { lang: UILanguage }) {
 function TestSection({ settings, lang }: { settings: AppSettings; lang: UILanguage }) {
   const Te = TS.test;
   const { state, lastRawTranscription, lastTranscription, error } = useRecordingState();
-  const sttLang = settings.language.mode || "english";
-  const sampleText = SAMPLE_SENTENCES[sttLang] || SAMPLE_SENTENCES.english;
+  // Sample follows UI language so English UI shows an English prompt.
+  // Recognition language (advanced) still controls the STT API hint separately.
+  const sampleText =
+    lang === "ja" ? SAMPLE_SENTENCES.japanese : SAMPLE_SENTENCES.english;
   const hotkeyLabel = formatHotkeyLabel(settings.hotkey.key);
   const modeLabel =
     settings.activation_mode === "hold"
@@ -1057,6 +1277,7 @@ export function SettingsPanel() {
         key === "general" ||
         key === "transcription" ||
         key === "post_processing" ||
+        key === "dictionary" ||
         key === "history" ||
         key === "test"
       ) {
@@ -1134,6 +1355,7 @@ export function SettingsPanel() {
     { key: "general", label: t(TS.nav.general, lang) },
     { key: "transcription", label: t(TS.nav.transcription, lang) },
     { key: "post_processing", label: t(TS.nav.postProcessing, lang) },
+    { key: "dictionary", label: t(TS.nav.dictionary, lang) },
     { key: "history", label: t(TS.nav.history, lang) },
     { key: "test", label: t(TS.nav.test, lang) },
   ];
@@ -1226,15 +1448,6 @@ export function SettingsPanel() {
           >
             {t(TS.setupGuide, lang)}
           </button>
-          <SegmentedControl
-            ariaLabel={t(TS.general.uiLanguage, lang)}
-            value={lang}
-            onChange={(l) => update({ ui_language: l })}
-            options={[
-              { value: "ja", label: "日本語" },
-              { value: "en", label: "English" },
-            ]}
-          />
           {version && (
             <div className="mt-1.5 space-y-1">
               {updateStatus === "idle" && (
@@ -1310,6 +1523,9 @@ export function SettingsPanel() {
             applyLlmPreset={applyLlmPreset}
             lang={lang}
           />
+        )}
+        {section === "dictionary" && (
+          <DictionarySection settings={settings} update={update} lang={lang} />
         )}
         {section === "history" && <HistorySection lang={lang} />}
         {section === "test" && <TestSection settings={settings} lang={lang} />}

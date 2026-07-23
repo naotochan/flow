@@ -199,7 +199,7 @@ pub async fn handle_recording_complete(
     }
 
     // 5. Post-process with LLM (optional)
-    let final_text = if settings.llm.enabled {
+    let mut final_text = if settings.llm.enabled {
         let lang_str = language.unwrap_or(&settings.language.primary);
         match claude::post_process(&raw_text, &settings.llm, lang_str).await {
             Ok(processed) => processed,
@@ -211,6 +211,17 @@ pub async fn handle_recording_complete(
     } else {
         raw_text.clone()
     };
+
+    // 5b. Apply replacement dictionary / snippets (after LLM so paste/history match UI).
+    let replaced = crate::config::apply_replacements(&final_text, &settings.replacements);
+    if replaced != final_text {
+        log::info!(
+            "Replacements applied ({} → {} chars)",
+            final_text.len(),
+            replaced.len()
+        );
+        final_text = replaced;
+    }
 
     log::info!("Final text: {}", final_text);
 
