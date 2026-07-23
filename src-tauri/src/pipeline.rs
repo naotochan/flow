@@ -228,6 +228,13 @@ pub async fn handle_recording_complete(
 
     log::info!("Final text: {}", final_text);
 
+    // 5c. Success feedback sound (after we know we have text to deliver).
+    crate::sound::play(
+        app_handle,
+        crate::sound::SoundKind::Done,
+        settings.sounds_enabled,
+    );
+
     // 6. Copy and paste FIRST, before touching the overlay window.
     //
     // Resizing/repositioning the overlay (step 7) can activate our app on

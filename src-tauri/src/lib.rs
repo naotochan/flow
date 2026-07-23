@@ -6,6 +6,7 @@ mod history;
 mod hotkey;
 mod paths;
 mod pipeline;
+mod sound;
 mod tray;
 
 use config::AppSettings;
@@ -953,6 +954,8 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
 
                     if !server_ok {
                         log::warn!("Local STT server not running, aborting recording");
+                        let sounds_enabled = settings_arc.lock().await.sounds_enabled;
+                        sound::play(&handle, sound::SoundKind::Error, sounds_enabled);
                         let _ = handle.emit(
                             "error",
                             pipeline::ErrorEvent {
@@ -991,6 +994,8 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                     let mut rec = recorder.lock().await;
                     if let Err(e) = rec.start() {
                         log::error!("Failed to start recording: {}", e);
+                        let sounds_enabled = settings_arc.lock().await.sounds_enabled;
+                        sound::play(&handle, sound::SoundKind::Error, sounds_enabled);
                         let _ = handle.emit(
                             "error",
                             pipeline::ErrorEvent {
@@ -1000,6 +1005,9 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                         return;
                     }
                 }
+
+                let sounds_enabled = settings_arc.lock().await.sounds_enabled;
+                sound::play(&handle, sound::SoundKind::Start, sounds_enabled);
 
                 // Emit audio level events periodically while recording
                 let recorder2 = recorder.clone();
@@ -1055,6 +1063,7 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                 .await
                 {
                     log::error!("Pipeline error: {}", e);
+                    sound::play(&handle, sound::SoundKind::Error, settings.sounds_enabled);
                     let _ = handle.emit(
                         "error",
                         pipeline::ErrorEvent {

@@ -415,6 +415,21 @@ function GeneralSection({
       <label className="flex items-start gap-3 text-sm text-[var(--text)] cursor-pointer">
         <input
           type="checkbox"
+          checked={settings.sounds_enabled ?? true}
+          onChange={(e) => update({ sounds_enabled: e.target.checked })}
+          className="accent-[var(--accent)] w-4 h-4 mt-0.5"
+        />
+        <span>
+          <span className="font-medium">{t(G.sounds, lang)}</span>
+          <span className="block text-[11px] text-[var(--text-faint)] mt-0.5">
+            {t(G.soundsHint, lang)}
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-3 text-sm text-[var(--text)] cursor-pointer">
+        <input
+          type="checkbox"
           checked={autoLaunch}
           onChange={(e) => toggleAutoLaunch(e.target.checked)}
           className="accent-[var(--accent)] w-4 h-4 mt-0.5"

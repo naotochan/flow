@@ -224,6 +224,14 @@ const translations = {
         ja: "認識結果をアクティブなアプリへすぐ挿入します。",
         en: "Insert results into the active app immediately.",
       },
+      sounds: {
+        ja: "操作音を再生",
+        en: "Play feedback sounds",
+      },
+      soundsHint: {
+        ja: "録音開始・完了・エラー時に短い音を出します。素材は後から差し替えできます。",
+        en: "Short sounds on record start, success, and errors. Assets can be swapped in later.",
+      },
       launchAtLogin: {
         ja: "ログイン時に自動起動",
         en: "Launch at login",

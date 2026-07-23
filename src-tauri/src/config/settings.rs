@@ -10,6 +10,9 @@ pub struct AppSettings {
     pub hotkey: HotkeyConfig,
     pub language: LanguageConfig,
     pub auto_paste: bool,
+    /// Play short feedback sounds on record start / success / error.
+    #[serde(default = "default_true")]
+    pub sounds_enabled: bool,
     #[serde(default)]
     pub local_stt_server: LocalSttServerConfig,
     #[serde(default)]
@@ -347,6 +350,7 @@ impl Default for AppSettings {
                 primary: "ja".to_string(),
             },
             auto_paste: true,
+            sounds_enabled: true,
             local_stt_server: LocalSttServerConfig::default(),
             onboarding_completed: false,
             onboarding_step: 0,
