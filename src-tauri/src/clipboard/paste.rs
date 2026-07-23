@@ -3,11 +3,16 @@ use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use std::thread;
 use std::time::Duration;
 
-pub fn copy_and_paste(text: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Copy to clipboard
+pub fn copy_text(text: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(text)?;
     log::info!("Text copied to clipboard ({} chars)", text.len());
+    Ok(())
+}
+
+pub fn copy_and_paste(text: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Copy to clipboard
+    copy_text(text)?;
 
     // 2. Wait for clipboard to settle
     thread::sleep(Duration::from_millis(80));

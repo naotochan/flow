@@ -17,6 +17,13 @@ import {
   setupLocalWhisper,
   getSettings,
   getBuildNumber,
+  getHistory,
+  clearHistory,
+  deleteHistoryEntry,
+  copyHistoryText,
+  pasteHistoryText,
+  HistoryEntry,
+  ReplacementRule,
 } from "../lib/ipc";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
@@ -29,6 +36,7 @@ import { translations, t, UILanguage } from "../lib/i18n";
 import { formatHotkeyLabel, hotkeyFromEvent } from "../lib/hotkey";
 import { applyAppearance } from "../lib/theme";
 import {
+  AppMark,
   FieldLabel,
   FieldHint,
   SettingsRow,
@@ -39,7 +47,224 @@ import {
 
 const TS = translations.settings;
 
-type Section = "general" | "transcription" | "post_processing" | "test";
+type Section =
+  | "general"
+  | "transcription"
+  | "post_processing"
+  | "dictionary"
+  | "history"
+  | "test";
+
+function newRuleId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `r-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function DictionaryRuleRow({
+  rule,
+  lang,
+  onCommit,
+  onToggle,
+  onDelete,
+}: {
+  rule: ReplacementRule;
+  lang: UILanguage;
+  onCommit: (id: string, from: string, to: string) => void;
+  onToggle: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const D = TS.dictionary;
+  const [from, setFrom] = useState(rule.from);
+  const [to, setTo] = useState(rule.to);
+
+  useEffect(() => {
+    setFrom(rule.from);
+    setTo(rule.to);
+  }, [rule.from, rule.to]);
+
+  const commit = () => {
+    const nextFrom = from.trim();
+    const nextTo = to;
+    if (nextFrom === rule.from && nextTo === rule.to) return;
+    if (!nextFrom) {
+      setFrom(rule.from);
+      return;
+    }
+    onCommit(rule.id, nextFrom, nextTo);
+  };
+
+  return (
+    <li
+      className={`bg-[var(--bg-muted)] border border-[var(--border)] rounded-xl px-3 py-2.5 space-y-2 ${
+        rule.enabled ? "" : "opacity-60"
+      }`}
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] gap-2 items-center">
+        <input
+          type="text"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+          onBlur={commit}
+          aria-label={t(D.from, lang)}
+          className={inputClass}
+        />
+        <span className="hidden sm:inline text-[var(--text-faint)] text-xs text-center px-1">
+          →
+        </span>
+        <input
+          type="text"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          onBlur={commit}
+          aria-label={t(D.to, lang)}
+          className={inputClass}
+        />
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <label className="flex items-center gap-2 text-[11px] text-[var(--text-muted)] cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={rule.enabled}
+            onChange={() => onToggle(rule.id)}
+            className="rounded border-[var(--border)]"
+          />
+          {t(D.enabled, lang)}
+        </label>
+        <button
+          type="button"
+          onClick={() => onDelete(rule.id)}
+          className="px-2.5 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:text-[var(--danger)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+        >
+          {t(D.delete, lang)}
+        </button>
+      </div>
+    </li>
+  );
+}
+
+function DictionarySection({
+  settings,
+  update,
+  lang,
+}: {
+  settings: AppSettings;
+  update: (p: Partial<AppSettings>) => void;
+  lang: UILanguage;
+}) {
+  const D = TS.dictionary;
+  const rules = settings.replacements ?? [];
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [error, setError] = useState("");
+
+  const persist = (next: ReplacementRule[]) => {
+    update({ replacements: next });
+  };
+
+  const onAdd = () => {
+    const trimmedFrom = from.trim();
+    if (!trimmedFrom) {
+      setError(t(D.saveError, lang));
+      return;
+    }
+    setError("");
+    persist([
+      {
+        id: newRuleId(),
+        from: trimmedFrom,
+        to: to.trim(),
+        enabled: true,
+      },
+      ...rules,
+    ]);
+    setFrom("");
+    setTo("");
+  };
+
+  const onToggle = (id: string) => {
+    persist(
+      rules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)),
+    );
+  };
+
+  const onCommit = (id: string, nextFrom: string, nextTo: string) => {
+    persist(
+      rules.map((r) =>
+        r.id === id ? { ...r, from: nextFrom, to: nextTo } : r,
+      ),
+    );
+  };
+
+  const onDelete = (id: string) => {
+    persist(rules.filter((r) => r.id !== id));
+  };
+
+  return (
+    <div className="space-y-4">
+      <FieldHint>{t(D.hint, lang)}</FieldHint>
+
+      <div className="bg-[var(--bg-muted)] border border-[var(--border)] rounded-xl p-3 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <FieldLabel>{t(D.from, lang)}</FieldLabel>
+            <input
+              type="text"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onAdd();
+              }}
+              placeholder={t(D.fromPlaceholder, lang)}
+              className={inputClass}
+            />
+          </div>
+          <div className="space-y-1">
+            <FieldLabel>{t(D.to, lang)}</FieldLabel>
+            <input
+              type="text"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onAdd();
+              }}
+              placeholder={t(D.toPlaceholder, lang)}
+              className={inputClass}
+            />
+          </div>
+        </div>
+        {error && <p className="text-[11px] text-[var(--danger)]">{error}</p>}
+        <button
+          type="button"
+          onClick={onAdd}
+          className="px-3 py-1.5 rounded-lg text-sm font-medium bg-[var(--accent-soft)] text-[var(--accent-text)] hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+        >
+          {t(D.add, lang)}
+        </button>
+      </div>
+
+      {rules.length === 0 ? (
+        <p className="text-sm text-[var(--text-muted)] bg-[var(--bg-muted)] border border-[var(--border)] rounded-lg px-3 py-4">
+          {t(D.empty, lang)}
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {rules.map((rule) => (
+            <DictionaryRuleRow
+              key={rule.id}
+              rule={rule}
+              lang={lang}
+              onCommit={onCommit}
+              onToggle={onToggle}
+              onDelete={onDelete}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function HotkeyCapture({
   settings,
@@ -138,7 +363,7 @@ function GeneralSection({
   return (
     <div className="space-y-6">
       <SettingsRow title={t(G.appearance, lang)} description={t(G.appearanceHint, lang)}>
-        <div className="min-w-[220px]">
+        <div className="min-w-[240px]">
           <SegmentedControl
             ariaLabel={t(G.appearance, lang)}
             value={appearance}
@@ -793,11 +1018,165 @@ const SAMPLE_SENTENCES: Record<string, string> = {
     "We have a meeting scheduled for tomorrow at 3 PM. Please prepare the documents in advance. It will be held in Conference Room B with five attendees.",
 };
 
+function formatHistoryTime(ms: number, lang: UILanguage): string {
+  try {
+    return new Date(ms).toLocaleString(lang === "ja" ? "ja-JP" : "en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function HistorySection({ lang }: { lang: UILanguage }) {
+  const H = TS.history;
+  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
+
+  const reload = () => {
+    getHistory()
+      .then(setEntries)
+      .catch(() => setEntries([]));
+  };
+
+  useEffect(() => {
+    reload();
+    const unlisteners: (() => void)[] = [];
+    listen("history-updated", () => reload()).then((u) => unlisteners.push(u));
+    listen("transcription-result", () => reload()).then((u) => unlisteners.push(u));
+    return () => unlisteners.forEach((fn) => fn());
+  }, []);
+
+  const onCopy = async (entry: HistoryEntry) => {
+    setBusyId(entry.id);
+    try {
+      await copyHistoryText(entry.text);
+      setFlashId(entry.id);
+      setTimeout(() => setFlashId(null), 1500);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const onPaste = async (entry: HistoryEntry) => {
+    setBusyId(entry.id);
+    try {
+      await pasteHistoryText(entry.text);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const onDelete = async (id: string) => {
+    try {
+      await deleteHistoryEntry(id);
+      setEntries((prev) => prev.filter((e) => e.id !== id));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const onClear = async () => {
+    if (!window.confirm(t(H.clearConfirm, lang))) return;
+    try {
+      await clearHistory();
+      setEntries([]);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <FieldHint>{t(H.pasteHint, lang)}</FieldHint>
+        {entries.length > 0 && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="flex-shrink-0 text-[11px] text-[var(--danger)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] rounded"
+          >
+            {t(H.clearAll, lang)}
+          </button>
+        )}
+      </div>
+
+      {entries.length === 0 ? (
+        <p className="text-sm text-[var(--text-muted)] bg-[var(--bg-muted)] border border-[var(--border)] rounded-lg px-3 py-4">
+          {t(H.empty, lang)}
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {entries.map((entry) => (
+            <li
+              key={entry.id}
+              className="bg-[var(--bg-muted)] border border-[var(--border)] rounded-xl px-3 py-2.5 space-y-2"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <p className="text-[10px] text-[var(--text-faint)] tabular-nums">
+                  {formatHistoryTime(entry.created_at, lang)}
+                </p>
+                {flashId === entry.id && (
+                  <span className="text-[10px] text-[var(--success)]">{t(H.copied, lang)}</span>
+                )}
+              </div>
+              <p className="text-sm text-[var(--text)] break-words whitespace-pre-wrap leading-relaxed">
+                {entry.text}
+              </p>
+              {entry.raw_text && entry.raw_text !== entry.text && (
+                <p className="text-[11px] text-[var(--text-faint)] break-words">
+                  <span className="font-medium">{t(H.rawLabel, lang)}: </span>
+                  {entry.raw_text}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                <button
+                  type="button"
+                  disabled={busyId === entry.id}
+                  onClick={() => onCopy(entry)}
+                  className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text)] hover:border-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] disabled:opacity-50"
+                >
+                  {t(H.copy, lang)}
+                </button>
+                <button
+                  type="button"
+                  disabled={busyId === entry.id}
+                  onClick={() => onPaste(entry)}
+                  className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-[var(--accent-soft)] text-[var(--accent-text)] hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] disabled:opacity-50"
+                >
+                  {t(H.paste, lang)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(entry.id)}
+                  className="px-2.5 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:text-[var(--danger)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+                >
+                  {t(H.delete, lang)}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function TestSection({ settings, lang }: { settings: AppSettings; lang: UILanguage }) {
   const Te = TS.test;
   const { state, lastRawTranscription, lastTranscription, error } = useRecordingState();
-  const sttLang = settings.language.mode || "english";
-  const sampleText = SAMPLE_SENTENCES[sttLang] || SAMPLE_SENTENCES.english;
+  // Sample follows UI language so English UI shows an English prompt.
+  // Recognition language (advanced) still controls the STT API hint separately.
+  const sampleText =
+    lang === "ja" ? SAMPLE_SENTENCES.japanese : SAMPLE_SENTENCES.english;
   const hotkeyLabel = formatHotkeyLabel(settings.hotkey.key);
   const modeLabel =
     settings.activation_mode === "hold"
@@ -891,6 +1270,26 @@ export function SettingsPanel() {
   }, []);
 
   useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>("open-section", (event) => {
+      const key = event.payload;
+      if (
+        key === "general" ||
+        key === "transcription" ||
+        key === "post_processing" ||
+        key === "dictionary" ||
+        key === "history" ||
+        key === "test"
+      ) {
+        setSection(key);
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
     if (!settings) return;
     applyAppearance((settings.appearance as AppAppearance) || "system");
   }, [settings?.appearance]);
@@ -956,6 +1355,8 @@ export function SettingsPanel() {
     { key: "general", label: t(TS.nav.general, lang) },
     { key: "transcription", label: t(TS.nav.transcription, lang) },
     { key: "post_processing", label: t(TS.nav.postProcessing, lang) },
+    { key: "dictionary", label: t(TS.nav.dictionary, lang) },
+    { key: "history", label: t(TS.nav.history, lang) },
     { key: "test", label: t(TS.nav.test, lang) },
   ];
 
@@ -1004,14 +1405,22 @@ export function SettingsPanel() {
   return (
     <div className="flex h-screen bg-[var(--bg)] text-[var(--text)]">
       <aside className="w-52 flex-shrink-0 border-r border-[var(--border)] flex flex-col bg-[var(--bg-muted)]">
-        <div className="p-4 pb-2">
-          <h1 className="text-sm font-semibold text-[var(--text)] text-pretty">
-            {version
-              ? `Whisper Dictation (${version} · build ${buildNumber || "—"})`
-              : t(TS.appTitle, lang)}
-          </h1>
+        <div className="px-3 pt-4 pb-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <AppMark size={32} />
+            <div className="min-w-0">
+              <h1 className="text-[13px] font-semibold text-[var(--text)] leading-tight truncate">
+                {t(TS.appTitle, lang)}
+              </h1>
+              {version && (
+                <p className="text-[10px] text-[var(--text-faint)] mt-0.5 tabular-nums truncate">
+                  {version} · build {buildNumber || "—"}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
-        <nav className="flex-1 px-2 py-2 space-y-0.5" aria-label="Settings">
+        <nav className="flex-1 px-2 py-1 space-y-0.5" aria-label="Settings">
           {NAV_ITEMS.map((item) => (
             <button
               key={item.key}
@@ -1020,7 +1429,7 @@ export function SettingsPanel() {
               onClick={() => setSection(item.key)}
               className={`w-full flex items-center px-3 py-2 rounded-lg text-sm transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
                 section === item.key
-                  ? "bg-[var(--bg-elevated)] text-[var(--text)] font-medium shadow-sm"
+                  ? "bg-[var(--accent-soft)] text-[var(--accent-text)] font-medium shadow-sm"
                   : "text-[var(--text-muted)] hover:bg-[var(--bg-elevated)]/60 hover:text-[var(--text)]"
               }`}
             >
@@ -1039,15 +1448,6 @@ export function SettingsPanel() {
           >
             {t(TS.setupGuide, lang)}
           </button>
-          <SegmentedControl
-            ariaLabel={t(TS.general.uiLanguage, lang)}
-            value={lang}
-            onChange={(l) => update({ ui_language: l })}
-            options={[
-              { value: "ja", label: "日本語" },
-              { value: "en", label: "English" },
-            ]}
-          />
           {version && (
             <div className="mt-1.5 space-y-1">
               {updateStatus === "idle" && (
@@ -1124,6 +1524,10 @@ export function SettingsPanel() {
             lang={lang}
           />
         )}
+        {section === "dictionary" && (
+          <DictionarySection settings={settings} update={update} lang={lang} />
+        )}
+        {section === "history" && <HistorySection lang={lang} />}
         {section === "test" && <TestSection settings={settings} lang={lang} />}
       </main>
     </div>

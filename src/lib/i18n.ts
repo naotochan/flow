@@ -151,7 +151,50 @@ const translations = {
       general: { ja: "一般", en: "General" },
       transcription: { ja: "音声認識", en: "Transcription" },
       postProcessing: { ja: "後処理", en: "Post-Processing" },
+      history: { ja: "履歴", en: "History" },
+      dictionary: { ja: "辞書", en: "Dictionary" },
       test: { ja: "テスト", en: "Test" },
+    },
+    dictionary: {
+      hint: {
+        ja: "認識結果（LLM後処理のあと）に適用されます。長いフレーズから優先して置換します。",
+        en: "Applied after recognition (and LLM, if on). Longer phrases win first.",
+      },
+      from: { ja: "認識された語", en: "Spoken / recognized" },
+      to: { ja: "置換後", en: "Replace with" },
+      fromPlaceholder: { ja: "例: なると", en: "e.g. naruto" },
+      toPlaceholder: { ja: "例: ナルト", en: "e.g. Naruto" },
+      add: { ja: "追加", en: "Add" },
+      empty: {
+        ja: "まだ辞書がありません。固有名詞や言い間違いの置換を追加できます。",
+        en: "No entries yet. Add proper nouns or misheard phrases.",
+      },
+      enabled: { ja: "有効", en: "On" },
+      delete: { ja: "削除", en: "Delete" },
+      saveError: {
+        ja: "「認識された語」を入力してください。",
+        en: "Enter the phrase to replace.",
+      },
+    },
+    history: {
+      empty: {
+        ja: "まだ認識履歴がありません。ホットキーで録音するとここに残ります。",
+        en: "No recognition history yet. Dictations will appear here.",
+      },
+      copy: { ja: "コピー", en: "Copy" },
+      paste: { ja: "ペースト", en: "Paste" },
+      delete: { ja: "削除", en: "Delete" },
+      clearAll: { ja: "すべて削除", en: "Clear All" },
+      clearConfirm: {
+        ja: "履歴をすべて削除しますか？",
+        en: "Clear all history?",
+      },
+      copied: { ja: "コピーしました", en: "Copied" },
+      rawLabel: { ja: "原文", en: "Raw" },
+      pasteHint: {
+        ja: "ペーストすると設定ウィンドウが閉じ、直前のアプリに貼り付けます。",
+        en: "Paste hides Settings and pastes into the previously focused app.",
+      },
     },
     general: {
       activationMode: { ja: "起動方式", en: "Activation Mode" },

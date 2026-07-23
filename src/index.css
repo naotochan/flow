@@ -75,6 +75,25 @@ body,
   color: var(--text);
 }
 
+/* Soft macOS-style mark treatment used by AppMark */
+.app-mark {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12), 0 0 0 1px var(--border);
+}
+
+/* Transparent fox silhouette; color follows theme text */
+.app-mark-ghost {
+  display: inline-block;
+  background-color: var(--text);
+  -webkit-mask-image: url("/app-icon-transparent.png");
+  mask-image: url("/app-icon-transparent.png");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

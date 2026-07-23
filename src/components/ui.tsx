@@ -1,5 +1,40 @@
 import type { ReactNode } from "react";
 
+/** Fennec mark — filled app tile, or ghost (transparent) for light surfaces. */
+export function AppMark({
+  size = 28,
+  className = "",
+  variant = "filled",
+}: {
+  size?: number;
+  className?: string;
+  variant?: "filled" | "ghost";
+}) {
+  if (variant === "ghost") {
+    return (
+      <span
+        className={`flex-shrink-0 app-mark-ghost ${className}`}
+        style={{ width: size, height: size }}
+        aria-hidden="true"
+      />
+    );
+  }
+
+  const radius = Math.max(6, Math.round(size * 0.22));
+  return (
+    <img
+      src="/app-icon.png"
+      alt=""
+      width={size}
+      height={size}
+      draggable={false}
+      className={`flex-shrink-0 object-cover app-mark ${className}`}
+      style={{ width: size, height: size, borderRadius: radius }}
+      aria-hidden="true"
+    />
+  );
+}
+
 export function FieldLabel({
   htmlFor,
   children,
@@ -71,7 +106,7 @@ export function SegmentedControl<T extends string>({
             role="radio"
             aria-checked={selected}
             onClick={() => onChange(opt.value)}
-            className={`flex-1 px-3 py-2 rounded-md text-sm transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
+            className={`flex-1 px-2.5 py-2 rounded-md text-sm whitespace-nowrap transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
               selected
                 ? "bg-[var(--accent-soft)] text-[var(--accent-text)] font-medium shadow-sm"
                 : "text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg-elevated)]/60"
