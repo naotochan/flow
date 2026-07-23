@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 pub enum HotkeyEvent {
     RecordStart,
     RecordStop,
+    /// Discard in-progress recording (e.g. Escape). No STT / paste.
+    RecordCancel,
 }
 
 enum DetectorState {
@@ -99,5 +101,16 @@ impl HotkeyDetector {
                 None
             }
         }
+    }
+
+    /// Whether the detector thinks a recording session is active.
+    pub fn is_recording(&self) -> bool {
+        matches!(self.state, DetectorState::Recording)
+    }
+
+    /// Reset to idle after an external cancel (Escape). Clears recording state
+    /// so a subsequent Hold key-up does not emit RecordStop.
+    pub fn cancel_recording(&mut self) {
+        self.state = DetectorState::Idle;
     }
 }
