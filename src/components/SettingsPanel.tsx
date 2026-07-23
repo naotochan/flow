@@ -933,7 +933,10 @@ function PostProcessingSection({
   lang: UILanguage;
 }) {
   const PP = TS.postProcessing;
-  const isLocalLlm = settings.llm.provider === "openai_compatible";
+  const isLocalLlm =
+    settings.llm.preset === "ollama" ||
+    settings.llm.preset === "lm_studio" ||
+    /localhost|127\.0\.0\.1/.test(settings.llm.base_url);
   const modeId = (settings.active_mode_id || "format") as PostProcessModeId;
   const modes = settings.modes?.length
     ? settings.modes
@@ -1018,6 +1021,16 @@ function PostProcessingSection({
             <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={t(PP.provider, lang)}>
               {(Object.keys(LLM_PRESETS) as (keyof typeof LLM_PRESETS)[]).map((key) => {
                 const selected = settings.llm.preset === key;
+                const label =
+                  key === "claude"
+                    ? "Claude"
+                    : key === "openai"
+                      ? "OpenAI"
+                      : key === "openrouter"
+                        ? "OpenRouter"
+                        : key === "ollama"
+                          ? "Ollama"
+                          : "LM Studio";
                 return (
                   <button
                     key={key}
@@ -1031,13 +1044,7 @@ function PostProcessingSection({
                         : "bg-[var(--bg-muted)] text-[var(--text-muted)] hover:text-[var(--text)]"
                     }`}
                   >
-                    {key === "claude"
-                      ? "Claude"
-                      : key === "openai"
-                        ? "OpenAI"
-                        : key === "ollama"
-                          ? "Ollama"
-                          : "LM Studio"}
+                    {label}
                   </button>
                 );
               })}
