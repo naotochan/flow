@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegram/nicetauri/refs/heads/main/crates/tauri-cli/schema.json",
-  "productName": "Whisper Dictation",
-  "version": "0.4.4",
-  "identifier": "com.whisper-dictation.desktop",
+  "productName": "Flow",
+  "version": "1.0.0",
+  "identifier": "com.flow.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -18,7 +18,7 @@
     "windows": [
       {
         "label": "settings",
-        "title": "Whisper Dictation",
+        "title": "Flow",
         "width": 740,
         "height": 640,
         "visible": false,
@@ -53,7 +53,7 @@
     },
     "macOS": {
       "infoPlist": "../Info.plist",
-      "bundleVersion": "214",
+      "bundleVersion": "300",
       "signingIdentity": "Apple Development: naoto.k70@gmail.com (S27SCJ956H)",
       "entitlements": "Entitlements.plist"
     },

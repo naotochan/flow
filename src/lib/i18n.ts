@@ -20,7 +20,7 @@ const translations = {
       },
     },
     welcome: {
-      title: { ja: "Whisper Dictation へようこそ", en: "Welcome to Whisper Dictation" },
+      title: { ja: "Flow へようこそ", en: "Welcome to Flow" },
       description: {
         ja: "ホットキーを押すだけで、音声をテキストに変換してアクティブなアプリにペーストする音声入力アプリです。",
         en: "A voice input app that converts speech to text and pastes it into the active app with just a hotkey press.",
@@ -36,8 +36,8 @@ const translations = {
     permissions: {
       title: { ja: "権限の設定", en: "Permissions" },
       description: {
-        ja: "このアプリを使うには、以下の3つの権限が必要です。それぞれの設定を開いて、Whisper Dictation を許可してください。",
-        en: "This app requires the following three permissions. Please open each setting and grant access to Whisper Dictation.",
+        ja: "このアプリを使うには、以下の3つの権限が必要です。それぞれの設定を開いて、Flow を許可してください。",
+        en: "This app requires the following three permissions. Please open each setting and grant access to Flow.",
       },
       accessibility: {
         label: { ja: "アクセシビリティ", en: "Accessibility" },
@@ -143,7 +143,7 @@ const translations = {
 
   // ─── Settings Panel ───
   settings: {
-    appTitle: { ja: "Whisper Dictation", en: "Whisper Dictation" },
+    appTitle: { ja: "Flow", en: "Flow" },
     saving: { ja: "保存中…", en: "Saving…" },
     setupGuide: { ja: "セットアップ画面を開く", en: "Open Setup" },
     loading: { ja: "読み込み中…", en: "Loading…" },
@@ -281,9 +281,44 @@ const translations = {
       },
     },
     postProcessing: {
-      enable: {
-        ja: "LLM後処理を有効にする",
-        en: "Enable LLM post-processing",
+      mode: { ja: "モード", en: "Mode" },
+      modeHint: {
+        ja: "トレイメニューからも切り替えできます",
+        en: "Also available from the tray menu",
+      },
+      modes: {
+        raw: { ja: "そのまま", en: "Raw" },
+        format: { ja: "整形", en: "Format" },
+        email: { ja: "メール", en: "Email" },
+        translate: { ja: "翻訳", en: "Translate" },
+        code: { ja: "コード", en: "Code" },
+      },
+      modeDesc: {
+        raw: {
+          ja: "認識結果をそのまま使います（LLMなし）",
+          en: "Use STT output as-is (no LLM)",
+        },
+        format: {
+          ja: "句読点・改行コマンドを整えます",
+          en: "Fix punctuation and spoken newline commands",
+        },
+        email: {
+          ja: "丁寧なメール文面に整えます",
+          en: "Shape dictation into a polished email body",
+        },
+        translate: {
+          ja: "日英を相互翻訳します",
+          en: "Translate between Japanese and English",
+        },
+        code: {
+          ja: "コード・識別子向けに最小限の整形",
+          en: "Light cleanup for code and identifiers",
+        },
+      },
+      prompt: { ja: "システムプロンプト", en: "System prompt" },
+      promptHint: {
+        ja: "{language} は認識言語ヒントに置換されます",
+        en: "{language} is replaced with the recognition language hint",
       },
       provider: { ja: "プロバイダー", en: "Provider" },
       baseUrl: { ja: "ベースURL", en: "Base URL" },
