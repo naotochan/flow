@@ -124,21 +124,35 @@ async fn save_settings(
 ) -> Result<(), String> {
     let mut settings = settings;
     config::normalize_modes(&mut settings);
-    config::save_settings(&settings).map_err(|e| e.to_string())?;
 
-    // Detect hotkey-related changes and extract values for reload
-    let (needs_hotkey_reload, hotkey_key, activation_mode, double_tap_ms) = {
+    let (was_history_enabled, needs_hotkey_reload, hotkey_key, activation_mode, double_tap_ms) = {
         let current = state.settings.lock().await;
-        let changed = current.hotkey.key != settings.hotkey.key
+        let hotkey_changed = current.hotkey.key != settings.hotkey.key
             || current.activation_mode != settings.activation_mode
             || current.hotkey.double_tap_ms != settings.hotkey.double_tap_ms;
         (
-            changed,
+            current.history_enabled,
+            hotkey_changed,
             settings.hotkey.key.clone(),
             settings.activation_mode.clone(),
             settings.hotkey.double_tap_ms,
         )
     };
+
+    // Turning history off clears persisted entries (privacy).
+    if was_history_enabled && !settings.history_enabled {
+        if let Err(e) = history::clear_history() {
+            log::warn!("Failed to clear history on disable: {}", e);
+        }
+        let _ = app.emit("history-updated", ());
+    } else if settings.history_enabled {
+        // Apply retention prune when saving privacy settings.
+        if let Err(e) = history::load_history_pruned(settings.history_retention_days) {
+            log::warn!("Failed to prune history on save: {}", e);
+        }
+    }
+
+    config::save_settings(&settings).map_err(|e| e.to_string())?;
 
     {
         let mut current = state.settings.lock().await;
@@ -559,8 +573,17 @@ fn get_build_number() -> String {
 }
 
 #[tauri::command]
-fn get_history() -> Result<Vec<history::HistoryEntry>, String> {
-    history::load_history().map_err(|e| e.to_string())
+async fn get_history(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<history::HistoryEntry>, String> {
+    let (enabled, retention) = {
+        let settings = state.settings.lock().await;
+        (settings.history_enabled, settings.history_retention_days)
+    };
+    if !enabled {
+        return Ok(Vec::new());
+    }
+    history::load_history_pruned(retention).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
