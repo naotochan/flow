@@ -283,13 +283,39 @@ async fn check_stt_server(state: tauri::State<'_, AppState>) -> Result<bool, Str
 
 #[tauri::command]
 async fn start_stt_server(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    // Already healthy — nothing to do (common during onboarding re-entry).
+    {
+        let settings = state.settings.lock().await;
+        let url = format!(
+            "http://{}:{}/health",
+            settings.local_stt_server.host, settings.local_stt_server.port
+        );
+        drop(settings);
+        let healthy = reqwest::Client::new()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(1))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+        if healthy {
+            log::info!("STT server already healthy — skip start");
+            return Ok(());
+        }
+    }
+
     // Check if already running
     {
         let mut proc = state.stt_server_process.lock().await;
         if let Some(ref mut child) = *proc {
             match child.try_wait() {
-                Ok(None) => return Err("Server is already running".to_string()),
-                _ => { *proc = None; }
+                Ok(None) => {
+                    log::info!("STT server process already tracked — skip start");
+                    return Ok(());
+                }
+                _ => {
+                    *proc = None;
+                }
             }
         }
     }
@@ -499,6 +525,19 @@ async fn cancel_download(state: tauri::State<'_, AppState>, app: tauri::AppHandl
 struct SetupProgressEvent {
     step: String,
     message: String,
+}
+
+#[tauri::command]
+fn get_build_number() -> String {
+    option_env!("WD_BUILD_NUMBER")
+        .unwrap_or("0")
+        .to_string()
+}
+
+/// Hayate-style window / sidebar label: `Whisper Dictation (0.2.3 · build 203)`.
+fn app_title_with_build(version: &str) -> String {
+    let build = option_env!("WD_BUILD_NUMBER").unwrap_or("0");
+    format!("Whisper Dictation ({version} · build {build})")
 }
 
 #[tauri::command]
@@ -1128,8 +1167,12 @@ pub fn run() {
             }
         })
         .setup(move |app| {
+            let version = app.package_info().version.to_string();
+            let titled = app_title_with_build(&version);
+
             // Show settings window on first launch (onboarding), hide otherwise
             if let Some(window) = app.get_webview_window("settings") {
+                let _ = window.set_title(&titled);
                 let show_onboarding = {
                     let state = app.state::<AppState>();
                     let s = tauri::async_runtime::block_on(state.settings.lock());
@@ -1184,6 +1227,7 @@ pub fn run() {
             initialize_hotkeys,
             save_onboarding_step,
             set_hotkey_test_mode,
+            get_build_number,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

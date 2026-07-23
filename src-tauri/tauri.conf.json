@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegram/nicetauri/refs/heads/main/crates/tauri-cli/schema.json",
   "productName": "Whisper Dictation",
-  "version": "0.1.14",
+  "version": "0.2.4",
   "identifier": "com.whisper-dictation.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -52,7 +52,8 @@
       "../download-model.py": "download-model.py"
     },
     "macOS": {
-      "infoPlist": "../Info.plist"
+      "infoPlist": "../Info.plist",
+      "bundleVersion": "204"
     },
     "icon": [
       "icons/32x32.png",

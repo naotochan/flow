@@ -18,10 +18,16 @@ pub struct AppSettings {
     pub onboarding_step: u32,
     #[serde(default = "default_ui_language")]
     pub ui_language: String,
+    #[serde(default = "default_appearance")]
+    pub appearance: String,
 }
 
 fn default_ui_language() -> String {
     "ja".to_string()
+}
+
+fn default_appearance() -> String {
+    "system".to_string()
 }
 
 /// STT (Speech-to-Text) provider configuration.
@@ -169,6 +175,7 @@ impl Default for AppSettings {
             onboarding_completed: false,
             onboarding_step: 0,
             ui_language: "ja".to_string(),
+            appearance: "system".to_string(),
         }
     }
 }

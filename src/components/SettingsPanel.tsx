@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   AppSettings,
+  AppAppearance,
   STT_PRESETS,
   LLM_PRESETS,
   SttConfig,
@@ -15,6 +16,7 @@ import {
   checkVenvExists,
   setupLocalWhisper,
   getSettings,
+  getBuildNumber,
 } from "../lib/ipc";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
@@ -24,91 +26,20 @@ import { useSettings } from "../hooks/useSettings";
 import { useRecordingState } from "../hooks/useRecordingState";
 import { OnboardingFlow } from "./OnboardingFlow";
 import { translations, t, UILanguage } from "../lib/i18n";
+import { formatHotkeyLabel, hotkeyFromEvent } from "../lib/hotkey";
+import { applyAppearance } from "../lib/theme";
+import {
+  FieldLabel,
+  FieldHint,
+  SettingsRow,
+  SegmentedControl,
+  inputClass,
+  monoInputClass,
+} from "./ui";
 
 const TS = translations.settings;
 
 type Section = "general" | "transcription" | "post_processing" | "test";
-
-/* ─── Sub-panels ─── */
-
-function formatHotkeyLabel(key: string): string {
-  const SPECIAL_LABELS: Record<string, string> = {
-    right_shift: "Right Shift",
-    left_shift: "Left Shift",
-    left_cmd: "Left Cmd",
-    right_cmd: "Right Cmd",
-    left_ctrl: "Left Ctrl",
-    right_ctrl: "Right Ctrl",
-    left_option: "Left Option",
-    right_option: "Right Option",
-    tab: "Tab",
-  };
-  if (SPECIAL_LABELS[key]) return SPECIAL_LABELS[key];
-  return key
-    .split("+")
-    .map((part) => {
-      if (part === "ctrl") return "Ctrl";
-      if (part === "meta" || part === "cmd") return "Cmd";
-      if (part === "alt") return "Alt";
-      if (part === "shift") return "Shift";
-      if (part.startsWith("f") && /^f\d+$/.test(part)) return part.toUpperCase();
-      if (part === "space") return "Space";
-      return part.toUpperCase();
-    })
-    .join(" + ");
-}
-
-function hotkeyFromEvent(e: KeyboardEvent): string | null {
-  // Escape = cancel
-  if (e.code === "Escape") return null;
-
-  // Standalone modifier keys — map to specific key names for CGEventTap
-  const STANDALONE_MODIFIERS: Record<string, string> = {
-    ShiftRight: "right_shift",
-    ShiftLeft: "left_shift",
-    MetaLeft: "left_cmd",
-    MetaRight: "right_cmd",
-    ControlLeft: "left_ctrl",
-    ControlRight: "right_ctrl",
-    AltLeft: "left_option",
-    AltRight: "right_option",
-  };
-
-  // If a modifier key is pressed alone (no other modifiers held), register it as standalone
-  const standalone = STANDALONE_MODIFIERS[e.code];
-  if (standalone) {
-    const otherMods =
-      (e.code.startsWith("Shift") ? false : e.shiftKey) ||
-      (e.code.startsWith("Meta") ? false : e.metaKey) ||
-      (e.code.startsWith("Control") ? false : e.ctrlKey) ||
-      (e.code.startsWith("Alt") ? false : e.altKey);
-    if (!otherMods) return standalone;
-    // If other modifiers are held, keep waiting for a non-modifier key
-    return "";
-  }
-
-  const parts: string[] = [];
-  if (e.ctrlKey) parts.push("ctrl");
-  if (e.metaKey) parts.push("meta");
-  if (e.altKey) parts.push("alt");
-  if (e.shiftKey) parts.push("shift");
-
-  // Map event.code to a short key name
-  let keyName: string;
-  if (e.code.startsWith("Key")) {
-    keyName = e.code.slice(3).toLowerCase(); // KeyA → a
-  } else if (e.code.startsWith("Digit")) {
-    keyName = e.code.slice(5); // Digit1 → 1
-  } else if (e.code.startsWith("F") && /^F\d+$/.test(e.code)) {
-    keyName = e.code.toLowerCase(); // F5 → f5
-  } else {
-    // Space, Enter, Backspace, Tab, etc.
-    keyName = e.code.toLowerCase();
-  }
-
-  parts.push(keyName);
-  return parts.join("+");
-}
 
 function HotkeyCapture({
   settings,
@@ -121,50 +52,54 @@ function HotkeyCapture({
 }) {
   const G = TS.general;
   const [capturing, setCapturing] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [needsRestart, setNeedsRestart] = useState(false);
 
   useEffect(() => {
     if (!capturing) return;
-
     const handler = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
-
       if (e.code === "Escape") {
         setCapturing(false);
         return;
       }
-
       const key = hotkeyFromEvent(e);
-      if (!key) return; // null = cancel, "" = lone modifier, keep waiting
-
+      if (!key) return;
       update({ hotkey: { ...settings.hotkey, key } });
+      setNeedsRestart(true);
       setCapturing(false);
     };
-
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [capturing, settings.hotkey, update]);
 
   return (
     <div className="space-y-2">
-      <label className="block text-xs font-medium text-slate-400">
-        {t(G.hotkey, lang)}
-      </label>
+      <FieldLabel>{t(G.hotkey, lang)}</FieldLabel>
       <button
-        ref={buttonRef}
+        type="button"
+        aria-label={t(G.hotkey, lang)}
         onClick={() => setCapturing(true)}
-        className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-all text-left ${
+        className={`w-full px-3 py-2 rounded-lg text-sm font-medium text-left transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
           capturing
-            ? "bg-violet-50 text-violet-500 ring-2 ring-violet-300 animate-pulse"
-            : "bg-white border border-slate-200 text-slate-700 hover:border-violet-300"
+            ? "bg-[var(--accent-soft)] text-[var(--accent-text)] ring-2 ring-[var(--accent-ring)]"
+            : "bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text)] hover:border-[var(--accent)]"
         }`}
       >
         {capturing ? t(G.pressAKey, lang) : formatHotkeyLabel(settings.hotkey.key)}
       </button>
-      <p className="text-[11px] text-slate-400">
-        {t(G.restartRequired, lang)}
-      </p>
+      <div className="flex items-center justify-between gap-2">
+        <FieldHint>{t(G.restartRequired, lang)}</FieldHint>
+        {needsRestart && (
+          <button
+            type="button"
+            onClick={() => relaunch()}
+            className="flex-shrink-0 text-[11px] font-medium text-[var(--accent-text)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] rounded"
+          >
+            {t(G.restartNow, lang)}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -181,17 +116,19 @@ function GeneralSection({
   const G = TS.general;
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [autoLaunch, setAutoLaunch] = useState(false);
+  const appearance = (settings.appearance || "system") as AppAppearance;
 
   useEffect(() => {
-    import("@tauri-apps/plugin-autostart").then(({ isEnabled }) =>
-      isEnabled().then(setAutoLaunch)
-    ).catch(() => {});
+    import("@tauri-apps/plugin-autostart")
+      .then(({ isEnabled }) => isEnabled().then(setAutoLaunch))
+      .catch(() => {});
   }, []);
 
   const toggleAutoLaunch = async (enabled: boolean) => {
     try {
       const { enable, disable } = await import("@tauri-apps/plugin-autostart");
-      if (enabled) await enable(); else await disable();
+      if (enabled) await enable();
+      else await disable();
       setAutoLaunch(enabled);
     } catch (e) {
       console.error("Autostart toggle failed:", e);
@@ -199,67 +136,120 @@ function GeneralSection({
   };
 
   return (
-    <div className="space-y-5">
-      {/* Activation Mode */}
-      <div className="space-y-2">
-        <label className="block text-xs font-medium text-slate-400">
-          {t(G.activationMode, lang)}
-        </label>
-        <div className="flex gap-2">
-          {(["hold", "double_tap"] as const).map((mode) => (
-            <button
-              key={mode}
-              className={`flex-1 px-3 py-2 rounded-lg text-sm transition-all ${
-                settings.activation_mode === mode
-                  ? "bg-violet-100 text-violet-700 font-medium ring-1 ring-violet-200"
-                  : "bg-slate-50 text-slate-500 hover:bg-slate-100"
-              }`}
-              onClick={() => update({ activation_mode: mode })}
-            >
-              {mode === "hold" ? t(G.holdToRecord, lang) : t(G.doubleTap, lang)}
-            </button>
-          ))}
+    <div className="space-y-6">
+      <SettingsRow title={t(G.appearance, lang)} description={t(G.appearanceHint, lang)}>
+        <div className="min-w-[220px]">
+          <SegmentedControl
+            ariaLabel={t(G.appearance, lang)}
+            value={appearance}
+            onChange={(value) => {
+              applyAppearance(value);
+              update({ appearance: value });
+            }}
+            options={[
+              { value: "system", label: t(G.appearanceSystem, lang) },
+              { value: "light", label: t(G.appearanceLight, lang) },
+              { value: "dark", label: t(G.appearanceDark, lang) },
+            ]}
+          />
         </div>
+      </SettingsRow>
+
+      <SettingsRow title={t(G.uiLanguage, lang)} description={t(G.uiLanguageHint, lang)}>
+        <div className="min-w-[180px]">
+          <SegmentedControl
+            ariaLabel={t(G.uiLanguage, lang)}
+            value={lang}
+            onChange={(value) => update({ ui_language: value })}
+            options={[
+              { value: "ja", label: "日本語" },
+              { value: "en", label: "English" },
+            ]}
+          />
+        </div>
+      </SettingsRow>
+
+      <label className="flex items-start gap-3 text-sm text-[var(--text)] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.auto_paste}
+          onChange={(e) => update({ auto_paste: e.target.checked })}
+          className="accent-[var(--accent)] w-4 h-4 mt-0.5"
+        />
+        <span>
+          <span className="font-medium">{t(G.autoPaste, lang)}</span>
+          <span className="block text-[11px] text-[var(--text-faint)] mt-0.5">
+            {t(G.autoPasteHint, lang)}
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-3 text-sm text-[var(--text)] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={autoLaunch}
+          onChange={(e) => toggleAutoLaunch(e.target.checked)}
+          className="accent-[var(--accent)] w-4 h-4 mt-0.5"
+        />
+        <span>
+          <span className="font-medium">{t(G.launchAtLogin, lang)}</span>
+          <span className="block text-[11px] text-[var(--text-faint)] mt-0.5">
+            {t(G.launchAtLoginHint, lang)}
+          </span>
+        </span>
+      </label>
+
+      <div className="space-y-2">
+        <FieldLabel>{t(G.activationMode, lang)}</FieldLabel>
+        <SegmentedControl
+          ariaLabel={t(G.activationMode, lang)}
+          value={settings.activation_mode}
+          onChange={(mode) => update({ activation_mode: mode })}
+          options={[
+            { value: "hold", label: t(G.holdToRecord, lang) },
+            { value: "double_tap", label: t(G.doubleTap, lang) },
+          ]}
+        />
       </div>
 
-      {/* Double-tap interval */}
       {settings.activation_mode === "double_tap" && (
         <div className="space-y-2">
-          <label className="block text-xs font-medium text-slate-400">
-            {lang === "ja" ? "ダブルタップ間隔" : "Double-tap interval"}
-          </label>
+          <FieldLabel htmlFor="double-tap-ms">{t(G.doubleTapInterval, lang)}</FieldLabel>
           <div className="flex items-center gap-3">
             <input
+              id="double-tap-ms"
               type="range"
               min={150}
               max={600}
               step={50}
+              name="double_tap_ms"
               value={settings.hotkey.double_tap_ms}
-              onChange={(e) => update({ hotkey: { ...settings.hotkey, double_tap_ms: Number(e.target.value) } })}
-              className="flex-1 accent-violet-500"
+              onChange={(e) =>
+                update({ hotkey: { ...settings.hotkey, double_tap_ms: Number(e.target.value) } })
+              }
+              className="flex-1 accent-[var(--accent)]"
             />
-            <span className="text-xs text-slate-500 w-14 text-right">{settings.hotkey.double_tap_ms}ms</span>
+            <span className="text-xs text-[var(--text-muted)] w-14 text-right tabular-nums">
+              {settings.hotkey.double_tap_ms}ms
+            </span>
           </div>
-          <p className="text-[11px] text-slate-400">
-            {lang === "ja"
-              ? "2回押しの間隔です。短いほど素早い操作が必要です。"
-              : "Time window between two presses. Shorter = faster taps required."}
-          </p>
+          <FieldHint>{t(G.doubleTapHint, lang)}</FieldHint>
         </div>
       )}
 
-      {/* Hotkey */}
       <HotkeyCapture settings={settings} update={update} lang={lang} />
 
-      {/* Advanced accordion */}
       <div>
         <button
+          type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-slate-600 transition-colors"
+          aria-expanded={showAdvanced}
+          className="flex items-center gap-2 text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] rounded"
         >
           <span
-            className="transition-transform duration-200 text-[10px]"
+            className="text-[10px] transition-transform duration-200"
             style={{ transform: showAdvanced ? "rotate(90deg)" : "rotate(0deg)" }}
+            aria-hidden="true"
           >
             ▶
           </span>
@@ -267,52 +257,21 @@ function GeneralSection({
         </button>
 
         {showAdvanced && (
-          <div className="mt-4 space-y-5 pl-1">
-            {/* Language */}
+          <div className="mt-4 space-y-4 pl-1">
             <div className="space-y-2">
-              <label className="block text-xs font-medium text-slate-400">
-                {t(G.language, lang)}
-              </label>
-              <div className="flex gap-2">
-                {(["auto", "japanese", "english"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm capitalize transition-all ${
-                      settings.language.mode === mode
-                        ? "bg-violet-100 text-violet-700 font-medium ring-1 ring-violet-200"
-                        : "bg-slate-50 text-slate-500 hover:bg-slate-100"
-                    }`}
-                    onClick={() =>
-                      update({ language: { ...settings.language, mode } })
-                    }
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
+              <FieldLabel>{t(G.recognitionLanguage, lang)}</FieldLabel>
+              <SegmentedControl
+                ariaLabel={t(G.recognitionLanguage, lang)}
+                value={settings.language.mode}
+                onChange={(mode) => update({ language: { ...settings.language, mode } })}
+                options={[
+                  { value: "auto", label: t(G.langAuto, lang) },
+                  { value: "japanese", label: t(G.langJapanese, lang) },
+                  { value: "english", label: t(G.langEnglish, lang) },
+                ]}
+              />
+              <FieldHint>{t(G.recognitionLanguageHint, lang)}</FieldHint>
             </div>
-
-            {/* Auto-paste */}
-            <label className="flex items-center gap-3 text-sm text-slate-600 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={settings.auto_paste}
-                onChange={(e) => update({ auto_paste: e.target.checked })}
-                className="accent-violet-500 w-4 h-4"
-              />
-              {t(G.autoPaste, lang)}
-            </label>
-
-            {/* Auto-launch on login */}
-            <label className="flex items-center gap-3 text-sm text-slate-600 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoLaunch}
-                onChange={(e) => toggleAutoLaunch(e.target.checked)}
-                className="accent-violet-500 w-4 h-4"
-              />
-              {lang === "ja" ? "ログイン時に自動起動" : "Launch at login"}
-            </label>
           </div>
         )}
       </div>
@@ -338,6 +297,7 @@ function TranscriptionSection({
     model: "base",
     port: 8080,
     host: "127.0.0.1",
+    python_path: "",
   };
   const isLocalWhisper = settings.stt.preset === "local_whisper";
   const isLocalStt = settings.stt.provider === "local_api";
@@ -354,7 +314,6 @@ function TranscriptionSection({
   const [setupMessage, setSetupMessage] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pausePollUntilRef = useRef<number>(0);
-
   const modelIsDownloaded = downloadedModels.includes(localServer.model);
 
   useEffect(() => {
@@ -364,7 +323,6 @@ function TranscriptionSection({
     }
   }, [isLocalWhisper]);
 
-  // Listen for download progress events
   useEffect(() => {
     const unlisten = listen<{ status: string; progress: number; message: string }>(
       "download-progress",
@@ -376,7 +334,6 @@ function TranscriptionSection({
           setDownloading(false);
           setDownloadProgress(100);
           setDownloadMessage("Download complete");
-          // Refresh downloaded models list
           checkDownloadedModels().then(setDownloadedModels).catch(() => {});
         } else if (status === "error" || status === "cancelled") {
           setDownloading(false);
@@ -384,7 +341,9 @@ function TranscriptionSection({
         }
       }
     );
-    return () => { unlisten.then((f) => f()); };
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, []);
 
   useEffect(() => {
@@ -417,9 +376,7 @@ function TranscriptionSection({
       await new Promise((r) => setTimeout(r, 2000));
       const running = await checkSttServer();
       setServerRunning(running);
-      if (!running) {
-        setServerError("Server started but health check failed. Check logs.");
-      }
+      if (!running) setServerError("Server started but health check failed. Check logs.");
     } catch (e) {
       setServerRunning(false);
       setServerError(String(e));
@@ -430,12 +387,13 @@ function TranscriptionSection({
 
   const handleStopServer = async () => {
     setServerLoading(true);
+    setServerError("");
     try {
       await stopSttServer();
       setServerRunning(false);
       pausePollUntilRef.current = Date.now() + 10000;
     } catch (e) {
-      alert(`Failed to stop: ${e}`);
+      setServerError((t(TR.stopFailed, lang) as (err: string) => string)(String(e)));
     } finally {
       setServerLoading(false);
     }
@@ -444,7 +402,7 @@ function TranscriptionSection({
   const handleDownload = async () => {
     setDownloading(true);
     setDownloadProgress(0);
-    setDownloadMessage("Starting download...");
+    setDownloadMessage("Starting download…");
     try {
       await downloadModel(localServer.model);
     } catch (e) {
@@ -457,33 +415,31 @@ function TranscriptionSection({
     try {
       await cancelDownload();
     } catch (e) {
-      alert(`Failed to cancel: ${e}`);
+      setServerError(String(e));
     }
   };
 
-  // Listen for setup-progress events (for venv setup from settings)
   useEffect(() => {
     if (!settingUp) return;
-    const unlisten = listen<{ step: string; message: string }>(
-      "setup-progress",
-      (event) => {
-        const { step, message } = event.payload;
-        setSetupMessage(message);
-        if (step === "done") {
-          setSettingUp(false);
-          setVenvReady(true);
-          checkDownloadedModels().then(setDownloadedModels).catch(() => {});
-        } else if (step === "error") {
-          setSettingUp(false);
-        }
+    const unlisten = listen<{ step: string; message: string }>("setup-progress", (event) => {
+      const { step, message } = event.payload;
+      setSetupMessage(message);
+      if (step === "done") {
+        setSettingUp(false);
+        setVenvReady(true);
+        checkDownloadedModels().then(setDownloadedModels).catch(() => {});
+      } else if (step === "error") {
+        setSettingUp(false);
       }
-    );
-    return () => { unlisten.then((f) => f()); };
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, [settingUp]);
 
   const handleSetupLocalWhisper = async () => {
     setSettingUp(true);
-    setSetupMessage(lang === "ja" ? "セットアップ中..." : "Setting up...");
+    setSetupMessage(lang === "ja" ? "セットアップ中…" : "Setting up…");
     try {
       await setupLocalWhisper();
     } catch (e) {
@@ -492,101 +448,96 @@ function TranscriptionSection({
     }
   };
 
+  const statusLabel =
+    venvReady === false
+      ? t(TR.needsSetup, lang)
+      : serverRunning === null
+        ? t(TR.checking, lang)
+        : serverRunning
+          ? t(TR.running, lang)
+          : modelIsDownloaded
+            ? t(TR.ready, lang)
+            : t(TR.stopped, lang);
+
   return (
     <div className="space-y-5">
-      {/* Provider */}
       <div className="space-y-2">
-        <label className="block text-xs font-medium text-slate-400">
-          {t(TR.provider, lang)}
-        </label>
-        <div className="flex gap-2">
-          {(
-            Object.entries(STT_PRESETS) as [
-              keyof typeof STT_PRESETS,
-              (typeof STT_PRESETS)[keyof typeof STT_PRESETS],
-            ][]
-          ).map(([key]) => (
-            <button
-              key={key}
-              className={`flex-1 px-3 py-2 rounded-lg text-sm transition-all ${
-                settings.stt.preset === key
-                  ? "bg-violet-100 text-violet-700 font-medium ring-1 ring-violet-200"
-                  : "bg-slate-50 text-slate-500 hover:bg-slate-100"
-              }`}
-              onClick={() => applySttPreset(key)}
-            >
-              {key === "openai"
-                ? "OpenAI"
-                : key === "lm_studio"
-                  ? "LM Studio"
-                  : lang === "ja" ? "ローカルモデル" : "Local Model"}
-            </button>
-          ))}
-        </div>
+        <FieldLabel>{t(TR.provider, lang)}</FieldLabel>
+        <SegmentedControl
+          ariaLabel={t(TR.provider, lang)}
+          value={settings.stt.preset as "openai" | "lm_studio" | "local_whisper"}
+          onChange={(key) => applySttPreset(key)}
+          options={[
+            { value: "openai", label: "OpenAI" },
+            { value: "lm_studio", label: "LM Studio" },
+            { value: "local_whisper", label: lang === "ja" ? "ローカルモデル" : "Local Model" },
+          ]}
+        />
       </div>
 
-      {/* Base URL / Model / API Key — hidden for local model */}
       {!isLocalWhisper && (
         <>
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-slate-400">
-              {t(TR.baseUrl, lang)}
-            </label>
+            <FieldLabel htmlFor="stt-base-url">{t(TR.baseUrl, lang)}</FieldLabel>
             <input
-              className="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none bg-white border-slate-200 text-slate-700 focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+              id="stt-base-url"
+              name="stt_base_url"
+              autoComplete="off"
+              spellCheck={false}
+              className={monoInputClass}
               value={settings.stt.base_url}
               onChange={(e) => updateStt({ base_url: e.target.value })}
             />
           </div>
-
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-slate-400">
-              {t(TR.model, lang)}
-            </label>
+            <FieldLabel htmlFor="stt-model">{t(TR.model, lang)}</FieldLabel>
             <input
-              className="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none bg-white border-slate-200 text-slate-700 focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+              id="stt-model"
+              name="stt_model"
+              autoComplete="off"
+              spellCheck={false}
+              className={monoInputClass}
               value={settings.stt.model}
               onChange={(e) => updateStt({ model: e.target.value })}
             />
           </div>
-
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-slate-400">
-              {t(TR.apiKey, lang)}
-            </label>
+            <FieldLabel htmlFor="stt-api-key">{t(TR.apiKey, lang)}</FieldLabel>
             <input
+              id="stt-api-key"
+              name="stt_api_key"
               type="password"
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none bg-white border-slate-200 text-slate-700 focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+              autoComplete="off"
+              spellCheck={false}
+              className={inputClass}
               value={settings.stt.api_key}
               onChange={(e) => updateStt({ api_key: e.target.value })}
-              placeholder={isLocalStt ? (lang === "ja" ? "（不要）" : "(not required)") : "sk-..."}
+              placeholder={isLocalStt ? (lang === "ja" ? "（不要）" : "(not required)") : "sk-…"}
             />
           </div>
         </>
       )}
 
-      {/* Local model setup (venv not ready) */}
       {isLocalWhisper && venvReady === false && (
-        <div className="space-y-3 bg-amber-50 rounded-xl p-4 border border-amber-100">
-          <p className="text-sm text-amber-700 font-medium">
-            {lang === "ja" ? "ローカルモデルが未セットアップです" : "Local model not set up"}
-          </p>
-          <p className="text-xs text-amber-600">
+        <div className="space-y-3 rounded-xl p-4 border border-[var(--warning)]/30 bg-[var(--warning-soft)]">
+          <p className="text-sm font-medium text-[var(--warning)]">{t(TR.needsSetup, lang)}</p>
+          <p className="text-xs text-[var(--text-muted)]">
             {lang === "ja"
               ? "お使いのマシンにWhisperモデルをインストールします。ネット不要で音声認識できるようになります。"
               : "Installs a Whisper model on your machine for offline speech recognition."}
           </p>
           {settingUp ? (
             <div className="space-y-1">
-              <div className="w-full bg-amber-100 rounded-full h-1.5 overflow-hidden">
-                <div className="bg-amber-400 h-full rounded-full animate-pulse w-full" />
+              <div className="w-full bg-[var(--border)] rounded-full h-1.5 overflow-hidden">
+                <div className="bg-[var(--warning)] h-full rounded-full w-full animate-pulse" />
               </div>
-              <p className="text-[11px] text-amber-500">{setupMessage}</p>
+              <p className="text-[11px] text-[var(--text-muted)]">{setupMessage}</p>
             </div>
           ) : (
             <button
+              type="button"
               onClick={handleSetupLocalWhisper}
-              className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-amber-100 text-amber-700 hover:bg-amber-200 border border-amber-200 transition-colors"
+              className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-[var(--accent-soft)] text-[var(--accent-text)] hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
             >
               {lang === "ja" ? "ローカルモデルをセットアップ" : "Setup Local Model"}
             </button>
@@ -594,80 +545,68 @@ function TranscriptionSection({
         </div>
       )}
 
-      {/* Local Server Management */}
       {isLocalWhisper && venvReady !== false && (
-        <div className="space-y-3 bg-slate-50 rounded-xl p-4 border border-slate-100">
+        <div className="space-y-3 rounded-xl p-4 border border-[var(--border)] bg-[var(--bg-muted)]">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400">
-              {t(TR.localServer, lang)}
-            </span>
-            <span className="flex items-center gap-1.5 text-xs text-slate-500">
+            <span className="text-xs font-medium text-[var(--text-muted)]">{t(TR.localServer, lang)}</span>
+            <span className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
               <span
                 className={`w-2 h-2 rounded-full ${
                   serverRunning === null
-                    ? "bg-slate-300"
+                    ? "bg-[var(--text-faint)]"
                     : serverRunning
-                      ? "bg-emerald-400"
-                      : "bg-rose-300"
+                      ? "bg-[var(--success)]"
+                      : "bg-[var(--danger)]"
                 }`}
+                aria-hidden="true"
               />
-              {serverRunning === null
-                ? t(TR.checking, lang)
-                : serverRunning
-                  ? t(TR.running, lang)
-                  : t(TR.stopped, lang)}
+              {statusLabel}
             </span>
           </div>
 
           <div className="space-y-1">
-            <label className={`block text-xs ${serverRunning || serverLoading || downloading ? "text-slate-300" : "text-slate-400"}`}>
-              {t(TR.model, lang)}
-            </label>
-            <div className="relative">
-              <select
-                className={`w-full appearance-none border rounded-lg px-3 py-2 pr-8 text-sm ${
-                  serverRunning || serverLoading || downloading
-                    ? "bg-white border-slate-100 text-slate-300 cursor-not-allowed"
-                    : "bg-white border-slate-200 text-slate-700"
-                }`}
-                value={localServer.model}
-                onChange={(e) => updateLocalServer({ model: e.target.value })}
-                disabled={!!serverRunning || serverLoading || downloading}
-              >
-                {[
-                  { value: "tiny", label: "tiny", size: "75MB" },
-                  { value: "base", label: "base", size: "140MB" },
-                  { value: "small", label: "small", size: "460MB" },
-                  { value: "medium", label: "medium", size: "1.5GB" },
-                  { value: "large-v3", label: "large-v3", size: "3GB" },
-                ].map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label} ({m.size}){downloadedModels.includes(m.value) ? " ✓" : ""}
-                  </option>
-                ))}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
-                <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-              </div>
-            </div>
+            <FieldLabel htmlFor="local-model">{t(TR.model, lang)}</FieldLabel>
+            <select
+              id="local-model"
+              name="local_model"
+              className={`${inputClass} appearance-none pr-8 ${
+                serverRunning || serverLoading || downloading ? "opacity-50 cursor-not-allowed" : ""
+              }`}
+              value={localServer.model}
+              onChange={(e) => updateLocalServer({ model: e.target.value })}
+              disabled={!!serverRunning || serverLoading || downloading}
+            >
+              {[
+                { value: "tiny", label: "tiny", size: "75MB" },
+                { value: "base", label: "base", size: "140MB" },
+                { value: "small", label: "small", size: "460MB" },
+                { value: "medium", label: "medium", size: "1.5GB" },
+                { value: "large-v3", label: "large-v3", size: "3GB" },
+              ].map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label} ({m.size})
+                  {downloadedModels.includes(m.value) ? " ✓" : ""}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* Download progress / Download button */}
           {!serverRunning && !modelIsDownloaded && (
             <div className="space-y-2">
               {downloading ? (
                 <>
-                  <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                  <div className="w-full bg-[var(--border)] rounded-full h-2 overflow-hidden">
                     <div
-                      className="bg-violet-400 h-full rounded-full transition-all duration-500"
+                      className="bg-[var(--accent)] h-full rounded-full transition-[width] duration-500"
                       style={{ width: `${downloadProgress}%` }}
                     />
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-slate-400">{downloadMessage}</span>
+                    <span className="text-[11px] text-[var(--text-faint)]">{downloadMessage}</span>
                     <button
+                      type="button"
                       onClick={handleCancelDownload}
-                      className="text-[11px] text-rose-500 hover:text-rose-600 transition-colors"
+                      className="text-[11px] text-[var(--danger)] hover:underline"
                     >
                       {t(TR.cancel, lang)}
                     </button>
@@ -675,8 +614,9 @@ function TranscriptionSection({
                 </>
               ) : (
                 <button
+                  type="button"
                   onClick={handleDownload}
-                  className="w-full px-3 py-1.5 rounded-lg text-xs bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors"
+                  className="w-full px-3 py-1.5 rounded-lg text-xs bg-[var(--accent-soft)] text-[var(--accent-text)] hover:opacity-90 transition-opacity"
                 >
                   {t(TR.downloadModel, lang)}
                 </button>
@@ -684,56 +624,52 @@ function TranscriptionSection({
             </div>
           )}
           {!serverRunning && modelIsDownloaded && (
-            <p className="text-[11px] text-emerald-500">{t(TR.modelDownloaded, lang)}</p>
+            <p className="text-[11px] text-[var(--success)]">{t(TR.modelDownloaded, lang)}</p>
           )}
 
           <div className="flex gap-2">
             <button
+              type="button"
               onClick={handleStartServer}
               disabled={serverLoading || serverRunning === true || !modelIsDownloaded || downloading}
-              className="flex-1 px-3 py-1.5 rounded-lg text-xs bg-emerald-100 text-emerald-700 hover:bg-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="flex-1 px-3 py-1.5 rounded-lg text-xs bg-[var(--success-soft)] text-[var(--success)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
             >
               {serverLoading && !serverRunning ? t(TR.starting, lang) : t(TR.start, lang)}
             </button>
             <button
+              type="button"
               onClick={handleStopServer}
               disabled={serverLoading || serverRunning === false}
-              className="flex-1 px-3 py-1.5 rounded-lg text-xs bg-rose-100 text-rose-600 hover:bg-rose-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="flex-1 px-3 py-1.5 rounded-lg text-xs bg-[var(--danger-soft)] text-[var(--danger)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
             >
               {serverLoading && serverRunning ? t(TR.stopping, lang) : t(TR.stop, lang)}
             </button>
           </div>
 
           {serverError && (
-            <div className="bg-rose-50 border border-rose-200 rounded-lg p-2">
-              <p className="text-[11px] text-rose-600 whitespace-pre-wrap break-all">{serverError}</p>
+            <div className="bg-[var(--danger-soft)] border border-[var(--danger)]/30 rounded-lg p-2">
+              <p className="text-[11px] text-[var(--danger)] whitespace-pre-wrap break-all">{serverError}</p>
             </div>
           )}
 
-          <details className="group">
-            <summary className="text-[11px] text-slate-400 cursor-pointer hover:text-slate-500 transition-colors select-none">
+          <details>
+            <summary className="text-[11px] text-[var(--text-faint)] cursor-pointer hover:text-[var(--text-muted)] transition-colors select-none">
               Advanced
             </summary>
             <div className="mt-2 space-y-1">
-              <label className={`block text-xs ${serverRunning ? "text-slate-300" : "text-slate-400"}`}>
-                {t(TR.port, lang)}
-              </label>
+              <FieldLabel htmlFor="local-port">{t(TR.port, lang)}</FieldLabel>
               <input
+                id="local-port"
+                name="local_port"
                 type="number"
-                className={`w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none ${
-                  serverRunning
-                    ? "bg-white border-slate-100 text-slate-300 cursor-not-allowed"
-                    : "bg-white border-slate-200 text-slate-700 focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
-                }`}
+                autoComplete="off"
+                className={`${monoInputClass} ${serverRunning ? "opacity-50 cursor-not-allowed" : ""}`}
                 value={localServer.port}
-                onChange={(e) =>
-                  updateLocalServer({ port: parseInt(e.target.value) || 8080 })
-                }
+                onChange={(e) => updateLocalServer({ port: parseInt(e.target.value) || 8080 })}
                 disabled={!!serverRunning}
               />
             </div>
           </details>
-
         </div>
       )}
     </div>
@@ -756,92 +692,92 @@ function PostProcessingSection({
 
   return (
     <div className="space-y-5">
-      {/* Enable toggle */}
-      <label className="flex items-center gap-3 text-sm text-slate-600 cursor-pointer">
+      <label className="flex items-center gap-3 text-sm text-[var(--text)] cursor-pointer">
         <input
           type="checkbox"
           checked={settings.llm.enabled}
           onChange={(e) => updateLlm({ enabled: e.target.checked })}
-          className="accent-violet-500 w-4 h-4"
+          className="accent-[var(--accent)] w-4 h-4"
         />
         {t(PP.enable, lang)}
       </label>
 
       {settings.llm.enabled && (
         <>
-          {/* Provider */}
           <div className="space-y-2">
-            <label className="block text-xs font-medium text-slate-400">
-              {t(PP.provider, lang)}
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                Object.entries(LLM_PRESETS) as [
-                  keyof typeof LLM_PRESETS,
-                  (typeof LLM_PRESETS)[keyof typeof LLM_PRESETS],
-                ][]
-              ).map(([key]) => (
-                <button
-                  key={key}
-                  className={`px-3 py-2 rounded-lg text-sm transition-all ${
-                    settings.llm.preset === key
-                      ? "bg-violet-100 text-violet-700 font-medium ring-1 ring-violet-200"
-                      : "bg-slate-50 text-slate-500 hover:bg-slate-100"
-                  }`}
-                  onClick={() => applyLlmPreset(key)}
-                >
-                  {key === "claude"
-                    ? "Claude"
-                    : key === "openai"
-                      ? "OpenAI"
-                      : key === "ollama"
-                        ? "Ollama"
-                        : "LM Studio"}
-                </button>
-              ))}
+            <FieldLabel>{t(PP.provider, lang)}</FieldLabel>
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={t(PP.provider, lang)}>
+              {(Object.keys(LLM_PRESETS) as (keyof typeof LLM_PRESETS)[]).map((key) => {
+                const selected = settings.llm.preset === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => applyLlmPreset(key)}
+                    className={`px-3 py-2 rounded-lg text-sm transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
+                      selected
+                        ? "bg-[var(--accent-soft)] text-[var(--accent-text)] font-medium"
+                        : "bg-[var(--bg-muted)] text-[var(--text-muted)] hover:text-[var(--text)]"
+                    }`}
+                  >
+                    {key === "claude"
+                      ? "Claude"
+                      : key === "openai"
+                        ? "OpenAI"
+                        : key === "ollama"
+                          ? "Ollama"
+                          : "LM Studio"}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* Base URL */}
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-slate-400">
-              {t(PP.baseUrl, lang)}
-            </label>
+            <FieldLabel htmlFor="llm-base-url">{t(PP.baseUrl, lang)}</FieldLabel>
             <input
-              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+              id="llm-base-url"
+              name="llm_base_url"
+              autoComplete="off"
+              spellCheck={false}
+              className={monoInputClass}
               value={settings.llm.base_url}
               onChange={(e) => updateLlm({ base_url: e.target.value })}
             />
           </div>
-
-          {/* Model */}
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-slate-400">
-              {t(PP.model, lang)}
-            </label>
+            <FieldLabel htmlFor="llm-model">{t(PP.model, lang)}</FieldLabel>
             <input
-              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+              id="llm-model"
+              name="llm_model"
+              autoComplete="off"
+              spellCheck={false}
+              className={monoInputClass}
               value={settings.llm.model}
               onChange={(e) => updateLlm({ model: e.target.value })}
             />
           </div>
-
-          {/* API Key */}
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-slate-400">
+            <FieldLabel htmlFor="llm-api-key">
               {t(PP.apiKey, lang)}{" "}
               {isLocalLlm && (
-                <span className="text-slate-300 normal-case font-normal">
+                <span className="text-[var(--text-faint)] font-normal">
                   {t(PP.optionalForLocal, lang)}
                 </span>
               )}
-            </label>
+            </FieldLabel>
             <input
+              id="llm-api-key"
+              name="llm_api_key"
               type="password"
-              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+              autoComplete="off"
+              spellCheck={false}
+              className={inputClass}
               value={settings.llm.api_key}
               onChange={(e) => updateLlm({ api_key: e.target.value })}
-              placeholder={isLocalLlm ? (lang === "ja" ? "（不要）" : "(not required)") : "sk-..."}
+              placeholder={isLocalLlm ? (lang === "ja" ? "（不要）" : "(not required)") : "sk-…"}
             />
           </div>
         </>
@@ -859,35 +795,34 @@ const SAMPLE_SENTENCES: Record<string, string> = {
 
 function TestSection({ settings, lang }: { settings: AppSettings; lang: UILanguage }) {
   const Te = TS.test;
-  const { state, lastRawTranscription, lastTranscription, error } =
-    useRecordingState();
-
+  const { state, lastRawTranscription, lastTranscription, error } = useRecordingState();
   const sttLang = settings.language.mode || "english";
   const sampleText = SAMPLE_SENTENCES[sttLang] || SAMPLE_SENTENCES.english;
-
   const hotkeyLabel = formatHotkeyLabel(settings.hotkey.key);
   const modeLabel =
     settings.activation_mode === "hold"
-      ? (lang === "ja" ? "長押し" : "hold")
-      : (lang === "ja" ? "ダブルタップ" : "double tap");
+      ? lang === "ja"
+        ? "長押し"
+        : "hold"
+      : lang === "ja"
+        ? "ダブルタップ"
+        : "double tap";
 
   return (
     <div className="space-y-5">
-      {/* Sample sentences */}
       <div className="space-y-2">
-        <p className="text-[10px] text-slate-400 uppercase tracking-wider">
+        <p className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider">
           {t(Te.tryReading, lang)}
         </p>
-        <p className="text-sm text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 leading-relaxed">
+        <p className="text-sm text-[var(--text)] bg-[var(--bg-muted)] border border-[var(--border)] rounded-lg px-3 py-2 leading-relaxed break-words">
           {sampleText}
         </p>
       </div>
 
-      {/* Recording status */}
       <div className="space-y-3">
         {state === "recording" && (
-          <div className="flex items-center gap-2 text-sm text-rose-500 font-medium">
-            <span className="relative flex h-2.5 w-2.5">
+          <div className="flex items-center gap-2 text-sm text-[var(--danger)] font-medium">
+            <span className="relative flex h-2.5 w-2.5" aria-hidden="true">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
             </span>
@@ -895,8 +830,8 @@ function TestSection({ settings, lang }: { settings: AppSettings; lang: UILangua
           </div>
         )}
         {state === "processing" && (
-          <div className="flex items-center gap-2 text-sm text-amber-500 font-medium">
-            <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+          <div className="flex items-center gap-2 text-sm text-[var(--warning)] font-medium">
+            <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
@@ -904,61 +839,61 @@ function TestSection({ settings, lang }: { settings: AppSettings; lang: UILangua
           </div>
         )}
         {state === "idle" && (
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-[var(--text-muted)]">
             {Te.pressToStart[lang](hotkeyLabel, modeLabel)}
           </p>
         )}
-
-        {/* Error */}
-        {error && (
-          <p className="text-sm text-rose-500">{error}</p>
-        )}
-
-        {/* Results */}
+        {error && <p className="text-sm text-[var(--danger)] break-words">{error}</p>}
         {lastRawTranscription && (
-          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-2">
+          <div className="bg-[var(--bg-muted)] border border-[var(--border)] rounded-xl p-3 space-y-2">
             <div>
-              <p className="text-[10px] text-slate-400 mb-0.5">Raw STT</p>
-              <p className="text-sm text-slate-600">{lastRawTranscription}</p>
+              <p className="text-[10px] text-[var(--text-faint)] mb-0.5">Raw STT</p>
+              <p className="text-sm text-[var(--text)] break-words">{lastRawTranscription}</p>
             </div>
             {settings.llm.enabled &&
               lastTranscription &&
               lastTranscription !== lastRawTranscription && (
-                <div className="border-t border-slate-100 pt-2">
-                  <p className="text-[10px] text-violet-400 mb-0.5">
-                    After LLM
-                  </p>
-                  <p className="text-sm text-slate-700">
-                    {lastTranscription}
-                  </p>
+                <div className="border-t border-[var(--border)] pt-2">
+                  <p className="text-[10px] text-[var(--accent-text)] mb-0.5">After LLM</p>
+                  <p className="text-sm text-[var(--text)] break-words">{lastTranscription}</p>
                 </div>
               )}
           </div>
         )}
       </div>
-
     </div>
   );
 }
 
-/* ─── Main Panel ─── */
-
-type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "downloading" | "ready" | "error";
+type UpdateStatus =
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "error";
 
 export function SettingsPanel() {
   const { settings, loading, saving, save } = useSettings();
   const [section, setSection] = useState<Section>("general");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [version, setVersion] = useState("");
+  const [buildNumber, setBuildNumber] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
   const [updateVersion, setUpdateVersion] = useState("");
   const updateRef = useRef<Awaited<ReturnType<typeof check>> | null>(null);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
-    // Silent auto-check on startup
+    getBuildNumber().then(setBuildNumber).catch(() => {});
     checkForUpdate();
   }, []);
+
+  useEffect(() => {
+    if (!settings) return;
+    applyAppearance((settings.appearance as AppAppearance) || "system");
+  }, [settings?.appearance]);
 
   async function checkForUpdate() {
     try {
@@ -995,14 +930,24 @@ export function SettingsPanel() {
 
   if (loading || !settings) {
     return (
-      <div className="flex items-center justify-center h-screen bg-white text-slate-400">
-        Loading...
+      <div className="flex items-center justify-center h-screen bg-[var(--bg)] text-[var(--text-muted)]">
+        Loading…
       </div>
     );
   }
 
   if (!settings.onboarding_completed || showOnboarding) {
-    return <OnboardingFlow settings={settings} save={save} onComplete={async () => { const latest = await getSettings(); save({ ...latest, onboarding_completed: true, onboarding_step: 0 }); setShowOnboarding(false); }} />;
+    return (
+      <OnboardingFlow
+        settings={settings}
+        save={save}
+        onComplete={async () => {
+          const latest = await getSettings();
+          save({ ...latest, onboarding_completed: true, onboarding_step: 0 });
+          setShowOnboarding(false);
+        }}
+      />
+    );
   }
 
   const lang: UILanguage = settings.ui_language || "ja";
@@ -1021,7 +966,10 @@ export function SettingsPanel() {
   const updateStt = (patch: Partial<SttConfig>) => {
     const merged = { ...settings.stt, ...patch };
     if (patch.api_key !== undefined && !patch.preset_api_keys) {
-      merged.preset_api_keys = { ...(settings.stt.preset_api_keys ?? {}), [merged.preset || "openai"]: patch.api_key };
+      merged.preset_api_keys = {
+        ...(settings.stt.preset_api_keys ?? {}),
+        [merged.preset || "openai"]: patch.api_key,
+      };
     }
     update({ stt: merged });
   };
@@ -1029,7 +977,10 @@ export function SettingsPanel() {
   const updateLlm = (patch: Partial<LlmConfig>) => {
     const merged = { ...settings.llm, ...patch };
     if (patch.api_key !== undefined && !patch.preset_api_keys) {
-      merged.preset_api_keys = { ...(settings.llm.preset_api_keys ?? {}), [merged.preset || "claude"]: patch.api_key };
+      merged.preset_api_keys = {
+        ...(settings.llm.preset_api_keys ?? {}),
+        [merged.preset || "claude"]: patch.api_key,
+      };
     }
     update({ llm: merged });
   };
@@ -1051,115 +1002,108 @@ export function SettingsPanel() {
   };
 
   return (
-    <div className="flex h-screen bg-white text-slate-700">
-      {/* Left sidebar */}
-      <aside className="w-52 flex-shrink-0 border-r border-slate-100 flex flex-col bg-slate-50/50">
+    <div className="flex h-screen bg-[var(--bg)] text-[var(--text)]">
+      <aside className="w-52 flex-shrink-0 border-r border-[var(--border)] flex flex-col bg-[var(--bg-muted)]">
         <div className="p-4 pb-2">
-          <h1 className="text-sm font-semibold text-slate-600">
-            {t(TS.appTitle, lang)}
+          <h1 className="text-sm font-semibold text-[var(--text)] text-pretty">
+            {version
+              ? `Whisper Dictation (${version} · build ${buildNumber || "—"})`
+              : t(TS.appTitle, lang)}
           </h1>
         </div>
-        <nav className="flex-1 px-2 py-2 space-y-0.5">
+        <nav className="flex-1 px-2 py-2 space-y-0.5" aria-label="Settings">
           {NAV_ITEMS.map((item) => (
             <button
               key={item.key}
+              type="button"
+              aria-current={section === item.key ? "page" : undefined}
               onClick={() => setSection(item.key)}
-              className={`w-full flex items-center px-3 py-2 rounded-lg text-sm transition-all ${
+              className={`w-full flex items-center px-3 py-2 rounded-lg text-sm transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
                 section === item.key
-                  ? "bg-white text-slate-700 font-medium shadow-sm"
-                  : "text-slate-400 hover:bg-white/60 hover:text-slate-600"
+                  ? "bg-[var(--bg-elevated)] text-[var(--text)] font-medium shadow-sm"
+                  : "text-[var(--text-muted)] hover:bg-[var(--bg-elevated)]/60 hover:text-[var(--text)]"
               }`}
             >
               {item.label}
             </button>
           ))}
         </nav>
-        <div className="px-3 py-3 border-t border-slate-100 space-y-2">
+        <div className="px-3 py-3 border-t border-[var(--border)] space-y-2">
           {saving && (
-            <div className="text-[10px] text-slate-300">{t(TS.saving, lang)}</div>
+            <div className="text-[10px] text-[var(--text-faint)]">{t(TS.saving, lang)}</div>
           )}
           <button
+            type="button"
             onClick={() => setShowOnboarding(true)}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] text-slate-400 hover:text-violet-500 border border-dashed border-slate-200 hover:border-violet-300 hover:bg-violet-50/50 transition-all whitespace-nowrap"
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] text-[var(--text-muted)] hover:text-[var(--accent-text)] border border-[var(--border)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/40 transition-[background-color,color,border-color] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
           >
-            <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
             {t(TS.setupGuide, lang)}
           </button>
-          <div className="flex gap-1 bg-slate-100 rounded-lg p-0.5">
-            {(["ja", "en"] as const).map((l) => (
-              <button
-                key={l}
-                onClick={() => update({ ui_language: l })}
-                className={`flex-1 px-2 py-1 rounded-md text-[11px] font-medium transition-all ${
-                  lang === l
-                    ? "bg-white text-slate-700 shadow-sm"
-                    : "text-slate-400 hover:text-slate-600"
-                }`}
-              >
-                {l === "ja" ? "日本語" : "English"}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            ariaLabel={t(TS.general.uiLanguage, lang)}
+            value={lang}
+            onChange={(l) => update({ ui_language: l })}
+            options={[
+              { value: "ja", label: "日本語" },
+              { value: "en", label: "English" },
+            ]}
+          />
           {version && (
             <div className="mt-1.5 space-y-1">
-              <p className="text-center text-[10px] text-slate-300">v{version}</p>
               {updateStatus === "idle" && (
                 <button
+                  type="button"
                   onClick={checkForUpdate}
-                  className="w-full text-[10px] text-slate-400 hover:text-violet-500 transition-colors"
+                  className="w-full text-[10px] text-[var(--text-faint)] hover:text-[var(--accent-text)] transition-colors"
                 >
                   {t(TS.updater.checkForUpdates, lang)}
                 </button>
               )}
               {updateStatus === "checking" && (
-                <p className="text-center text-[10px] text-slate-400 animate-pulse">
+                <p className="text-center text-[10px] text-[var(--text-muted)] animate-pulse">
                   {t(TS.updater.checking, lang)}
                 </p>
               )}
               {updateStatus === "up-to-date" && (
-                <p className="text-center text-[10px] text-emerald-500">
+                <p className="text-center text-[10px] text-[var(--success)]">
                   {t(TS.updater.upToDate, lang)}
                 </p>
               )}
               {updateStatus === "available" && (
                 <button
+                  type="button"
                   onClick={downloadAndInstall}
-                  className="w-full px-2 py-1 rounded-md text-[10px] font-medium bg-violet-100 text-violet-600 hover:bg-violet-200 transition-all"
+                  className="w-full px-2 py-1 rounded-md text-[10px] font-medium bg-[var(--accent-soft)] text-[var(--accent-text)] hover:opacity-90 transition-opacity"
                 >
                   {(t(TS.updater.availableVersion, lang) as (v: string) => string)(updateVersion)}
                 </button>
               )}
               {updateStatus === "downloading" && (
-                <p className="text-center text-[10px] text-violet-500 animate-pulse">
+                <p className="text-center text-[10px] text-[var(--accent-text)] animate-pulse">
                   {t(TS.updater.downloading, lang)}
                 </p>
               )}
               {updateStatus === "ready" && (
                 <button
+                  type="button"
                   onClick={() => relaunch()}
-                  className="w-full px-2 py-1 rounded-md text-[10px] font-medium bg-emerald-100 text-emerald-600 hover:bg-emerald-200 transition-all"
+                  className="w-full px-2 py-1 rounded-md text-[10px] font-medium bg-[var(--success-soft)] text-[var(--success)] hover:opacity-90 transition-opacity"
                 >
                   {t(TS.updater.relaunch, lang)}
                 </button>
               )}
               {updateStatus === "error" && (
-                <p className="text-center text-[10px] text-red-400">
-                  {t(TS.updater.error, lang)}
-                </p>
+                <p className="text-center text-[10px] text-[var(--danger)]">{t(TS.updater.error, lang)}</p>
               )}
             </div>
           )}
         </div>
       </aside>
 
-      {/* Right content pane */}
-      <main className="flex-1 overflow-y-auto p-6">
-        <h2 className="text-base font-semibold text-slate-700 mb-5">
+      <main className="flex-1 overflow-y-auto p-6 bg-[var(--bg)]">
+        <h2 className="text-base font-semibold text-[var(--text)] mb-5 text-pretty">
           {NAV_ITEMS.find((i) => i.key === section)?.label}
         </h2>
-
         {section === "general" && (
           <GeneralSection settings={settings} update={update} lang={lang} />
         )}

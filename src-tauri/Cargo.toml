@@ -1,6 +1,6 @@
 [package]
 name = "whisper-dictation"
-version = "0.1.14"
+version = "0.2.4"
 description = "Desktop speech-to-text app with Whisper API"
 authors = ["you"]
 edition = "2021"
@@ -11,6 +11,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }

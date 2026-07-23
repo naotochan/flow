@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   AppSettings,
+  AppAppearance,
   STT_PRESETS,
   SttConfig,
   getSettings,
+  getBuildNumber,
   saveOnboardingStep,
   setupLocalWhisper,
   downloadModel,
@@ -13,85 +15,20 @@ import {
   checkPermissions,
   initializeHotkeys,
   setHotkeyTestMode,
+  checkSttServer,
+  startSttServer,
   PermissionStatus,
 } from "../lib/ipc";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useRecordingState } from "../hooks/useRecordingState";
 import { translations, t, UILanguage } from "../lib/i18n";
+import { formatHotkeyLabel, hotkeyFromEvent } from "../lib/hotkey";
+import { applyAppearance } from "../lib/theme";
+import { FieldLabel, SegmentedControl, inputClass, monoInputClass } from "./ui";
 
 const T = translations.onboarding;
-
-/* ─── Helpers (shared with SettingsPanel) ─── */
-
-function formatHotkeyLabel(key: string): string {
-  const SPECIAL_LABELS: Record<string, string> = {
-    right_shift: "Right Shift",
-    left_shift: "Left Shift",
-    left_cmd: "Left Cmd",
-    right_cmd: "Right Cmd",
-    left_ctrl: "Left Ctrl",
-    right_ctrl: "Right Ctrl",
-    left_option: "Left Option",
-    right_option: "Right Option",
-    tab: "Tab",
-  };
-  if (SPECIAL_LABELS[key]) return SPECIAL_LABELS[key];
-  return key
-    .split("+")
-    .map((part) => {
-      if (part === "ctrl") return "Ctrl";
-      if (part === "meta" || part === "cmd") return "Cmd";
-      if (part === "alt") return "Alt";
-      if (part === "shift") return "Shift";
-      if (part.startsWith("f") && /^f\d+$/.test(part)) return part.toUpperCase();
-      if (part === "space") return "Space";
-      return part.toUpperCase();
-    })
-    .join(" + ");
-}
-
-function hotkeyFromEvent(e: KeyboardEvent): string | null | undefined {
-  if (e.code === "Escape") return null;
-
-  // Standalone modifier keys — map to specific key names for CGEventTap
-  const STANDALONE_MODIFIERS: Record<string, string> = {
-    ShiftRight: "right_shift",
-    ShiftLeft: "left_shift",
-    MetaLeft: "left_cmd",
-    MetaRight: "right_cmd",
-    ControlLeft: "left_ctrl",
-    ControlRight: "right_ctrl",
-    AltLeft: "left_option",
-    AltRight: "right_option",
-  };
-
-  const standalone = STANDALONE_MODIFIERS[e.code];
-  if (standalone) {
-    const otherMods =
-      (e.code.startsWith("Shift") ? false : e.shiftKey) ||
-      (e.code.startsWith("Meta") ? false : e.metaKey) ||
-      (e.code.startsWith("Control") ? false : e.ctrlKey) ||
-      (e.code.startsWith("Alt") ? false : e.altKey);
-    if (!otherMods) return standalone;
-    return undefined; // keep waiting
-  }
-
-  const parts: string[] = [];
-  if (e.ctrlKey) parts.push("ctrl");
-  if (e.metaKey) parts.push("meta");
-  if (e.altKey) parts.push("alt");
-  if (e.shiftKey) parts.push("shift");
-
-  let keyName: string;
-  if (e.code.startsWith("Key")) keyName = e.code.slice(3).toLowerCase();
-  else if (e.code.startsWith("Digit")) keyName = e.code.slice(5);
-  else if (e.code.startsWith("F") && /^F\d+$/.test(e.code)) keyName = e.code.toLowerCase();
-  else keyName = e.code.toLowerCase();
-
-  parts.push(keyName);
-  return parts.join("+");
-}
+const G = translations.settings.general;
 
 const SAMPLE_TEXT: Record<string, string> = {
   japanese:
@@ -100,7 +37,21 @@ const SAMPLE_TEXT: Record<string, string> = {
     "We have a meeting scheduled for tomorrow at 3 PM. Please prepare the documents in advance. It will be held in Conference Room B with five attendees.",
 };
 
-/* ─── Step: Welcome ─── */
+/** Start local STT server if needed; waits until /health is OK. Returns error message or null. */
+async function ensureLocalSttServer(settings: AppSettings): Promise<string | null> {
+  if (settings.stt.preset !== "local_whisper") return null;
+  try {
+    if (await checkSttServer()) return null;
+    await startSttServer();
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (await checkSttServer()) return null;
+    }
+    return "health-timeout";
+  } catch (e) {
+    return String(e);
+  }
+}
 
 function StepWelcome({ lang }: { lang: UILanguage }) {
   const W = T.welcome;
@@ -108,25 +59,28 @@ function StepWelcome({ lang }: { lang: UILanguage }) {
     <div className="space-y-5">
       <div className="text-center">
         <div className="inline-flex items-center justify-center w-16 h-16 mb-4">
-          <img src="/app-icon.png" alt="Whisper Dictation" className="w-16 h-16" />
+          <img src="/app-icon.png" alt="Whisper Dictation" width={64} height={64} className="w-16 h-16" />
         </div>
-        <h3 className="text-xl font-semibold text-slate-700 mb-2">
+        <h3 className="text-xl font-semibold text-[var(--text)] mb-2 text-pretty">
           {t(W.title, lang)}
         </h3>
-        <p className="text-sm text-slate-400 leading-relaxed">
+        <p className="text-sm text-[var(--text-muted)] leading-relaxed">
           {t(W.description, lang)}
         </p>
       </div>
 
       <div className="space-y-2.5 mt-6">
         {W.features.map((feature, i) => (
-          <div key={i} className="flex items-start gap-3 bg-slate-50 rounded-lg px-3.5 py-2.5 border border-slate-100">
-            <div className="flex-shrink-0 w-5 h-5 rounded-full bg-violet-100 flex items-center justify-center mt-0.5">
-              <svg className="w-3 h-3 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+          <div
+            key={i}
+            className="flex items-start gap-3 bg-[var(--bg-muted)] rounded-lg px-3.5 py-2.5 border border-[var(--border)]"
+          >
+            <div className="flex-shrink-0 w-5 h-5 rounded-full bg-[var(--accent-soft)] flex items-center justify-center mt-0.5">
+              <svg className="w-3 h-3 text-[var(--accent-text)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3} aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <p className="text-sm text-slate-600">{t(feature, lang)}</p>
+            <p className="text-sm text-[var(--text)]">{t(feature, lang)}</p>
           </div>
         ))}
       </div>
@@ -134,21 +88,31 @@ function StepWelcome({ lang }: { lang: UILanguage }) {
   );
 }
 
-/* ─── Step: Permissions ─── */
-
-function StepPermissions({ lang }: { lang: UILanguage }) {
+function StepPermissions({
+  lang,
+  onAllGrantedChange,
+}: {
+  lang: UILanguage;
+  onAllGrantedChange: (ok: boolean) => void;
+}) {
   const P = T.permissions;
-
   const [permStatus, setPermStatus] = useState<PermissionStatus | null>(null);
 
   useEffect(() => {
     const poll = () => {
-      checkPermissions().then(setPermStatus).catch(() => {});
+      checkPermissions()
+        .then((status) => {
+          setPermStatus(status);
+          onAllGrantedChange(
+            !!(status.accessibility && status.microphone && status.input_monitoring)
+          );
+        })
+        .catch(() => {});
     };
     poll();
     const id = setInterval(poll, 2000);
     return () => clearInterval(id);
-  }, []);
+  }, [onAllGrantedChange]);
 
   const permissions = [
     { key: "accessibility" as const, ...P.accessibility },
@@ -164,15 +128,16 @@ function StepPermissions({ lang }: { lang: UILanguage }) {
     return null;
   };
 
+  const allGranted =
+    !!permStatus?.accessibility &&
+    !!permStatus?.microphone &&
+    !!permStatus?.input_monitoring;
+
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-lg font-semibold text-slate-700 mb-1">
-          {t(P.title, lang)}
-        </h3>
-        <p className="text-sm text-slate-400">
-          {t(P.description, lang)}
-        </p>
+        <h3 className="text-lg font-semibold text-[var(--text)] mb-1">{t(P.title, lang)}</h3>
+        <p className="text-sm text-[var(--text-muted)]">{t(P.description, lang)}</p>
       </div>
 
       <div className="space-y-3">
@@ -183,41 +148,43 @@ function StepPermissions({ lang }: { lang: UILanguage }) {
               key={perm.key}
               className={`flex items-center justify-between rounded-lg px-4 py-3 border transition-colors ${
                 granted
-                  ? "bg-emerald-50 border-emerald-200"
-                  : "bg-slate-50 border-slate-100"
+                  ? "bg-[var(--success-soft)] border-[var(--success)]/30"
+                  : "bg-[var(--bg-muted)] border-[var(--border)]"
               }`}
             >
               <div className="flex items-center gap-3 flex-1 min-w-0 mr-3">
                 {granted !== null && (
-                  <div className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${
-                    granted ? "bg-emerald-500" : "bg-slate-200"
-                  }`}>
+                  <div
+                    className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${
+                      granted ? "bg-[var(--success)]" : "bg-[var(--border-strong)]"
+                    }`}
+                    aria-hidden="true"
+                  >
                     {granted ? (
                       <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
                     ) : (
-                      <svg className="w-3 h-3 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <svg className="w-3 h-3 text-[var(--text-faint)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                       </svg>
                     )}
                   </div>
                 )}
-                <div>
-                  <p className="text-sm font-medium text-slate-700">
-                    {t(perm.label, lang)}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-[var(--text)]">{t(perm.label, lang)}</p>
+                  <p className="text-[11px] text-[var(--text-faint)] mt-0.5">
                     {t(perm.description, lang)}
                   </p>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => openSystemPreferences(perm.key)}
-                className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
                   granted
-                    ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-                    : "bg-violet-100 text-violet-700 hover:bg-violet-200"
+                    ? "bg-[var(--success-soft)] text-[var(--success)]"
+                    : "bg-[var(--accent-soft)] text-[var(--accent-text)]"
                 }`}
               >
                 {t(P.openSettings, lang)}
@@ -227,28 +194,38 @@ function StepPermissions({ lang }: { lang: UILanguage }) {
         })}
       </div>
 
-      <p className="text-[11px] text-slate-400 leading-relaxed">
-        {t(P.note, lang)}
-      </p>
+      {allGranted ? (
+        <p className="text-sm text-[var(--success)] font-medium">{t(P.allGranted, lang)}</p>
+      ) : (
+        <p className="text-[11px] text-[var(--text-faint)] leading-relaxed">{t(P.note, lang)}</p>
+      )}
     </div>
   );
 }
 
-/* ─── Step: Local Whisper Setup ─── */
-
-function LocalWhisperSetup({ settings, save, lang }: { settings: AppSettings; save: (s: AppSettings) => void; lang: UILanguage }) {
+function LocalWhisperSetup({
+  settings,
+  save,
+  lang,
+}: {
+  settings: AppSettings;
+  save: (s: AppSettings) => void;
+  lang: UILanguage;
+}) {
   const S = T.stt;
   const [setupStep, setSetupStep] = useState<"idle" | "venv" | "pip" | "download" | "done" | "error">("idle");
   const [message, setMessage] = useState("");
   const [downloadProgress, setDownloadProgress] = useState(0);
 
   useEffect(() => {
-    Promise.all([checkVenvExists(), checkDownloadedModels()]).then(([venvExists, models]) => {
-      if (venvExists && models.length > 0) {
-        setSetupStep("done");
-        setMessage(t(S.localWhisperReady, lang));
-      }
-    }).catch(() => {});
+    Promise.all([checkVenvExists(), checkDownloadedModels()])
+      .then(([venvExists, models]) => {
+        if (venvExists && models.length > 0) {
+          setSetupStep("done");
+          setMessage(t(S.localWhisperReady, lang));
+        }
+      })
+      .catch(() => {});
   }, [lang]);
 
   useEffect(() => {
@@ -257,31 +234,60 @@ function LocalWhisperSetup({ settings, save, lang }: { settings: AppSettings; sa
       setSetupStep(step as typeof setupStep);
       setMessage(msg);
     });
-    return () => { unlisten.then((f) => f()); };
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, []);
 
   useEffect(() => {
-    const unlisten = listen<{ status: string; progress: number; message: string }>("download-progress", (event) => {
-      const { status, progress, message: msg } = event.payload;
-      setDownloadProgress(progress);
-      setMessage(msg);
-      if (status === "done") {
-        setSetupStep("done");
-        setMessage(t(S.localWhisperReady, lang));
-        // Sync React state with Rust-side model change ("base")
-        save({ ...settings, local_stt_server: { ...settings.local_stt_server, model: "base" } });
-      } else if (status === "error") {
-        setSetupStep("error");
+    const unlisten = listen<{ status: string; progress: number; message: string }>(
+      "download-progress",
+      (event) => {
+        const { status, progress, message: msg } = event.payload;
+        setDownloadProgress(progress);
+        setMessage(msg);
+        if (status === "done") {
+          setSetupStep("done");
+          setMessage(t(S.localWhisperReady, lang));
+          save({
+            ...settings,
+            local_stt_server: { ...settings.local_stt_server, model: "base" },
+          });
+          // Model is ready — start the local STT server so the test step works.
+          void (async () => {
+            const err = await ensureLocalSttServer({
+              ...settings,
+              stt: { ...settings.stt, preset: "local_whisper" },
+              local_stt_server: { ...settings.local_stt_server, model: "base" },
+            });
+            if (err) {
+              console.error("Failed to auto-start STT server after download:", err);
+            }
+          })();
+        } else if (status === "error") {
+          setSetupStep("error");
+        }
       }
-    });
-    return () => { unlisten.then((f) => f()); };
+    );
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, [lang]);
+
+  // Already set up from a previous visit — still ensure the server is up.
+  useEffect(() => {
+    if (setupStep !== "done") return;
+    void ensureLocalSttServer({
+      ...settings,
+      stt: { ...settings.stt, preset: "local_whisper" },
+    });
+  }, [setupStep]);
 
   const handleSetup = async () => {
     try {
       await setupLocalWhisper();
       setSetupStep("download");
-      setMessage("Downloading base model...");
+      setMessage("Downloading base model…");
       setDownloadProgress(0);
       await downloadModel("base");
     } catch (e) {
@@ -295,8 +301,8 @@ function LocalWhisperSetup({ settings, save, lang }: { settings: AppSettings; sa
   return (
     <div className="space-y-3">
       {setupStep === "done" ? (
-        <div className="flex items-center gap-2 text-sm text-emerald-600 font-medium bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2.5">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className="flex items-center gap-2 text-sm text-[var(--success)] font-medium bg-[var(--success-soft)] border border-[var(--success)]/20 rounded-lg px-3 py-2.5">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
           {message}
@@ -305,39 +311,39 @@ function LocalWhisperSetup({ settings, save, lang }: { settings: AppSettings; sa
         <>
           {!isRunning && setupStep !== "error" && (
             <button
+              type="button"
               onClick={handleSetup}
-              className="w-full bg-violet-500 text-white hover:bg-violet-600 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
+              className="w-full bg-[var(--accent)] text-[var(--bg)] hover:opacity-90 px-4 py-2.5 rounded-lg text-sm font-medium transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
             >
               {t(S.setupLocalWhisper, lang)}
             </button>
           )}
-
           {isRunning && (
             <div className="space-y-2">
-              <div className="flex items-center gap-2 text-sm text-violet-600 font-medium">
-                <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+              <div className="flex items-center gap-2 text-sm text-[var(--accent-text)] font-medium">
+                <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
                 {message}
               </div>
               {setupStep === "download" && (
-                <div className="w-full bg-slate-100 rounded-full h-1.5">
+                <div className="w-full bg-[var(--border)] rounded-full h-1.5">
                   <div
-                    className="bg-violet-500 h-1.5 rounded-full transition-all duration-300"
+                    className="bg-[var(--accent)] h-1.5 rounded-full transition-[width] duration-300"
                     style={{ width: `${downloadProgress}%` }}
                   />
                 </div>
               )}
             </div>
           )}
-
           {setupStep === "error" && (
             <div className="space-y-2">
-              <p className="text-sm text-rose-500">{message}</p>
+              <p className="text-sm text-[var(--danger)] break-words">{message}</p>
               <button
+                type="button"
                 onClick={handleSetup}
-                className="w-full bg-slate-100 text-slate-600 hover:bg-slate-200 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                className="w-full bg-[var(--bg-muted)] text-[var(--text)] hover:opacity-90 px-4 py-2.5 rounded-lg text-sm font-medium transition-opacity"
               >
                 {t(S.retry, lang)}
               </button>
@@ -345,15 +351,10 @@ function LocalWhisperSetup({ settings, save, lang }: { settings: AppSettings; sa
           )}
         </>
       )}
-
-      <p className="text-[11px] text-slate-400">
-        {t(S.localWhisperNote, lang)}
-      </p>
+      <p className="text-[11px] text-[var(--text-faint)]">{t(S.localWhisperNote, lang)}</p>
     </div>
   );
 }
-
-/* ─── Step: STT ─── */
 
 function StepStt({
   settings,
@@ -399,99 +400,74 @@ function StepStt({
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-lg font-semibold text-slate-700 mb-1">
-          {t(S.title, lang)}
-        </h3>
-        <p className="text-sm text-slate-400">
-          {t(S.description, lang)}
-        </p>
+        <h3 className="text-lg font-semibold text-[var(--text)] mb-1">{t(S.title, lang)}</h3>
+        <p className="text-sm text-[var(--text-muted)]">{t(S.description, lang)}</p>
       </div>
 
-      {/* Provider tabs */}
       <div className="space-y-2">
-        <label className="block text-xs font-medium text-slate-400">
-          {t(S.provider, lang)}
-        </label>
-        <div className="flex gap-2">
-          {(
-            Object.entries(STT_PRESETS) as [
-              keyof typeof STT_PRESETS,
-              (typeof STT_PRESETS)[keyof typeof STT_PRESETS],
-            ][]
-          ).map(([key]) => (
-            <button
-              key={key}
-              className={`flex-1 px-3 py-2 rounded-lg text-sm transition-all ${
-                settings.stt.preset === key
-                  ? "bg-violet-100 text-violet-700 font-medium ring-1 ring-violet-200"
-                  : "bg-slate-50 text-slate-500 hover:bg-slate-100"
-              }`}
-              onClick={() => applySttPreset(key)}
-            >
-              {key === "openai"
-                ? "OpenAI"
-                : key === "lm_studio"
-                  ? "LM Studio"
-                  : lang === "ja" ? "ローカルモデル" : "Local Model"}
-            </button>
-          ))}
-        </div>
+        <FieldLabel>{t(S.provider, lang)}</FieldLabel>
+        <SegmentedControl
+          ariaLabel={t(S.provider, lang)}
+          value={settings.stt.preset as "openai" | "lm_studio" | "local_whisper"}
+          onChange={(key) => applySttPreset(key)}
+          options={[
+            { value: "openai", label: "OpenAI" },
+            { value: "lm_studio", label: "LM Studio" },
+            { value: "local_whisper", label: lang === "ja" ? "ローカルモデル" : "Local Model" },
+          ]}
+        />
       </div>
 
-      {/* OpenAI / LM Studio fields */}
       {!isLocalWhisper && (
         <>
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-slate-400">
-              {t(S.model, lang)}
-            </label>
+            <FieldLabel htmlFor="onb-stt-model">{t(S.model, lang)}</FieldLabel>
             <input
-              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+              id="onb-stt-model"
+              name="stt_model"
+              autoComplete="off"
+              spellCheck={false}
+              className={monoInputClass}
               value={settings.stt.model}
               onChange={(e) => updateStt({ model: e.target.value })}
             />
           </div>
-
           {isLocal && (
             <div className="space-y-1">
-              <label className="block text-xs font-medium text-slate-400">
-                {t(S.baseUrl, lang)}
-              </label>
+              <FieldLabel htmlFor="onb-stt-url">{t(S.baseUrl, lang)}</FieldLabel>
               <input
-                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+                id="onb-stt-url"
+                name="stt_base_url"
+                autoComplete="off"
+                spellCheck={false}
+                className={monoInputClass}
                 value={settings.stt.base_url}
                 onChange={(e) => updateStt({ base_url: e.target.value })}
               />
             </div>
           )}
-
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-slate-400">
-              {t(S.apiKey, lang)}
-            </label>
+            <FieldLabel htmlFor="onb-stt-key">{t(S.apiKey, lang)}</FieldLabel>
             <input
+              id="onb-stt-key"
+              name="stt_api_key"
               type="password"
-              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+              autoComplete="off"
+              spellCheck={false}
+              className={inputClass}
               value={settings.stt.api_key}
               onChange={(e) => updateStt({ api_key: e.target.value })}
-              placeholder={isLocal ? lang === "ja" ? "（不要）" : "(not required)" : "sk-..."}
+              placeholder={isLocal ? (lang === "ja" ? "（不要）" : "(not required)") : "sk-…"}
             />
           </div>
         </>
       )}
 
-      {/* Local Whisper setup */}
       {isLocalWhisper && <LocalWhisperSetup settings={settings} save={save} lang={lang} />}
-
-      {/* Tip */}
-      <p className="text-[11px] text-slate-400 leading-relaxed">
-        {t(S.tip, lang)}
-      </p>
+      <p className="text-[11px] text-[var(--text-faint)] leading-relaxed">{t(S.tip, lang)}</p>
     </div>
   );
 }
-
-/* ─── Step: Hotkey ─── */
 
 function StepHotkey({
   settings,
@@ -509,30 +485,27 @@ function StepHotkey({
   const H = T.hotkey;
   const [capturing, setCapturing] = useState(initialCapturing);
   const [detected, setDetected] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
 
   const update = useCallback(
     (patch: Partial<AppSettings>) => save({ ...settings, ...patch }),
     [settings, save]
   );
 
-  // Enable hotkey test mode while on this step (suppresses actual recording)
   useEffect(() => {
     setHotkeyTestMode(true).catch(() => {});
-    return () => { setHotkeyTestMode(false).catch(() => {}); };
+    return () => {
+      setHotkeyTestMode(false).catch(() => {});
+    };
   }, []);
 
-  // Listen for hotkey detection events (test mode emits these instead of recording)
   useEffect(() => {
     const unlisten = listen<string>("hotkey-detected", (event) => {
-      if (event.payload === "pressed") {
-        setDetected(true);
-      } else {
-        // Show feedback briefly then hide
-        setTimeout(() => setDetected(false), 1500);
-      }
+      if (event.payload === "pressed") setDetected(true);
+      else setTimeout(() => setDetected(false), 1500);
     });
-    return () => { unlisten.then((f) => f()); };
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, []);
 
   useEffect(() => {
@@ -552,91 +525,72 @@ function StepHotkey({
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [capturing, settings.hotkey, update]);
+  }, [capturing, settings.hotkey, update, onHotkeySet]);
 
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-lg font-semibold text-slate-700 mb-1">
-          {t(H.title, lang)}
-        </h3>
-        <p className="text-sm text-slate-400">
-          {t(H.description, lang)}
-        </p>
+        <h3 className="text-lg font-semibold text-[var(--text)] mb-1">{t(H.title, lang)}</h3>
+        <p className="text-sm text-[var(--text-muted)]">{t(H.description, lang)}</p>
       </div>
 
-      {/* Activation Mode */}
       <div className="space-y-2">
-        <label className="block text-xs font-medium text-slate-400">
-          {t(H.activationMode, lang)}
-        </label>
-        <div className="flex gap-2">
-          {(["hold", "double_tap"] as const).map((mode) => (
-            <button
-              key={mode}
-              className={`flex-1 px-3 py-2 rounded-lg text-sm transition-all ${
-                settings.activation_mode === mode
-                  ? "bg-violet-100 text-violet-700 font-medium ring-1 ring-violet-200"
-                  : "bg-slate-50 text-slate-500 hover:bg-slate-100"
-              }`}
-              onClick={() => update({ activation_mode: mode })}
-            >
-              {mode === "hold" ? t(H.holdToRecord, lang) : t(H.doubleTap, lang)}
-            </button>
-          ))}
-        </div>
+        <FieldLabel>{t(H.activationMode, lang)}</FieldLabel>
+        <SegmentedControl
+          ariaLabel={t(H.activationMode, lang)}
+          value={settings.activation_mode}
+          onChange={(mode) => update({ activation_mode: mode })}
+          options={[
+            { value: "hold", label: t(H.holdToRecord, lang) },
+            { value: "double_tap", label: t(H.doubleTap, lang) },
+          ]}
+        />
       </div>
 
-      {/* Key capture */}
       <div className="space-y-2">
-        <label className="block text-xs font-medium text-slate-400">
-          {t(H.hotkeyLabel, lang)}
-        </label>
+        <FieldLabel>{t(H.hotkeyLabel, lang)}</FieldLabel>
         <button
-          ref={buttonRef}
+          type="button"
+          aria-label={t(H.hotkeyLabel, lang)}
           onClick={() => setCapturing(true)}
-          className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-all text-left ${
+          className={`w-full px-3 py-2 rounded-lg text-sm font-medium text-left transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
             capturing
-              ? "bg-violet-50 text-violet-500 ring-2 ring-violet-300 animate-pulse"
-              : "bg-white border border-slate-200 text-slate-700 hover:border-violet-300"
+              ? "bg-[var(--accent-soft)] text-[var(--accent-text)] ring-2 ring-[var(--accent-ring)]"
+              : "bg-[var(--bg-elevated)] border border-[var(--border)] text-[var(--text)] hover:border-[var(--accent)]"
           }`}
         >
-          {capturing
-            ? t(H.pressAKey, lang)
-            : formatHotkeyLabel(settings.hotkey.key)}
+          {capturing ? t(H.pressAKey, lang) : formatHotkeyLabel(settings.hotkey.key)}
         </button>
       </div>
 
-      {/* Double-tap interval */}
       {settings.activation_mode === "double_tap" && (
         <div className="space-y-2">
-          <label className="block text-xs font-medium text-slate-400">
-            {lang === "ja" ? "ダブルタップ間隔" : "Double-tap interval"}
-          </label>
+          <FieldLabel htmlFor="onb-double-tap">{t(G.doubleTapInterval, lang)}</FieldLabel>
           <div className="flex items-center gap-3">
             <input
+              id="onb-double-tap"
               type="range"
               min={150}
               max={600}
               step={50}
+              name="double_tap_ms"
               value={settings.hotkey.double_tap_ms}
-              onChange={(e) => update({ hotkey: { ...settings.hotkey, double_tap_ms: Number(e.target.value) } })}
-              className="flex-1 accent-violet-500"
+              onChange={(e) =>
+                update({ hotkey: { ...settings.hotkey, double_tap_ms: Number(e.target.value) } })
+              }
+              className="flex-1 accent-[var(--accent)]"
             />
-            <span className="text-xs text-slate-500 w-14 text-right">{settings.hotkey.double_tap_ms}ms</span>
+            <span className="text-xs text-[var(--text-muted)] w-14 text-right tabular-nums">
+              {settings.hotkey.double_tap_ms}ms
+            </span>
           </div>
-          <p className="text-[11px] text-slate-400">
-            {lang === "ja"
-              ? "2回押しの間隔です。短いほど素早い操作が必要です。"
-              : "Time window between two presses. Shorter = faster taps required."}
-          </p>
+          <p className="text-[11px] text-[var(--text-faint)]">{t(G.doubleTapHint, lang)}</p>
         </div>
       )}
 
-      {/* Hotkey detection feedback */}
       {detected && (
-        <div className="flex items-center gap-2 text-sm text-emerald-600 font-medium bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 animate-pulse">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className="flex items-center gap-2 text-sm text-[var(--success)] font-medium bg-[var(--success-soft)] border border-[var(--success)]/30 rounded-lg px-3 py-2.5">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
           {lang === "ja" ? "ホットキー検出OK" : "Hotkey detected OK"}
@@ -646,49 +600,85 @@ function StepHotkey({
   );
 }
 
-/* ─── Step: Test ─── */
-
 function StepTest({ settings, lang }: { settings: AppSettings; lang: UILanguage }) {
   const Te = T.test;
   const { state, lastRawTranscription, lastTranscription, error, clearResults } =
     useRecordingState();
+  const [serverStatus, setServerStatus] = useState<
+    "idle" | "starting" | "ready" | "error"
+  >("idle");
 
-  // Clear any leftover results from previous steps (e.g. hotkey step leaking recordings)
   useEffect(() => {
     clearResults();
   }, []);
 
+  // Local Whisper needs the STT server before the hotkey test can succeed.
+  useEffect(() => {
+    if (settings.stt.preset !== "local_whisper") {
+      setServerStatus("idle");
+      return;
+    }
+    let cancelled = false;
+    setServerStatus("starting");
+    void (async () => {
+      const err = await ensureLocalSttServer(settings);
+      if (cancelled) return;
+      setServerStatus(err ? "error" : "ready");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.stt.preset, settings.local_stt_server.port, settings.local_stt_server.host]);
+
   const sttLang = settings.language.mode || "english";
   const sampleText = SAMPLE_TEXT[sttLang] || SAMPLE_TEXT.english;
-
   const hotkeyLabel = formatHotkeyLabel(settings.hotkey.key);
+  const waitingForServer = settings.stt.preset === "local_whisper" && serverStatus === "starting";
 
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-lg font-semibold text-slate-700 mb-1">
-          {t(Te.title, lang)}
-        </h3>
-        <p className="text-sm text-slate-400">
-          {t(Te.description, lang)}
-        </p>
+        <h3 className="text-lg font-semibold text-[var(--text)] mb-1">{t(Te.title, lang)}</h3>
+        <p className="text-sm text-[var(--text-muted)]">{t(Te.description, lang)}</p>
       </div>
 
-      {/* Sample text */}
+      {settings.stt.preset === "local_whisper" && (
+        <div
+          className={`text-sm rounded-lg px-3 py-2.5 border ${
+            serverStatus === "ready"
+              ? "text-[var(--success)] bg-[var(--success-soft)] border-[var(--success)]/20"
+              : serverStatus === "error"
+                ? "text-[var(--danger)] bg-[var(--danger-soft)] border-[var(--danger)]/20"
+                : "text-[var(--accent-text)] bg-[var(--accent-soft)] border-[var(--accent)]/20"
+          }`}
+        >
+          {serverStatus === "starting" && (
+            <span className="inline-flex items-center gap-2">
+              <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              {t(Te.startingServer, lang)}
+            </span>
+          )}
+          {serverStatus === "ready" && t(Te.serverReady, lang)}
+          {serverStatus === "error" && t(Te.serverStartFailed, lang)}
+        </div>
+      )}
+
       <div className="space-y-2">
-        <p className="text-[10px] text-slate-400 uppercase tracking-wider">
+        <p className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider">
           {t(Te.tryReading, lang)}
         </p>
-        <p className="text-sm text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 leading-relaxed">
+        <p className="text-sm text-[var(--text)] bg-[var(--bg-muted)] border border-[var(--border)] rounded-lg px-3 py-2 leading-relaxed break-words">
           {sampleText}
         </p>
       </div>
 
-      {/* Recording status */}
       <div className="space-y-3">
         {state === "recording" && (
-          <div className="flex items-center gap-2 text-sm text-rose-500 font-medium">
-            <span className="relative flex h-2.5 w-2.5">
+          <div className="flex items-center gap-2 text-sm text-[var(--danger)] font-medium">
+            <span className="relative flex h-2.5 w-2.5" aria-hidden="true">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
             </span>
@@ -696,49 +686,44 @@ function StepTest({ settings, lang }: { settings: AppSettings; lang: UILanguage 
           </div>
         )}
         {state === "processing" && (
-          <div className="flex items-center gap-2 text-sm text-amber-500 font-medium">
-            <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+          <div className="flex items-center gap-2 text-sm text-[var(--warning)] font-medium">
+            <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
             {t(Te.processing, lang)}
           </div>
         )}
-        {state === "idle" && (
-          <p className="text-sm text-slate-400">
+        {state === "idle" && !waitingForServer && (
+          <p className="text-sm text-[var(--text-muted)]">
             {Te.pressToStart[lang](hotkeyLabel, settings.activation_mode)}
           </p>
         )}
-
-        {error && <p className="text-sm text-rose-500">{error}</p>}
-
+        {error && <p className="text-sm text-[var(--danger)] break-words">{error}</p>}
         {lastRawTranscription && (
-          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-2">
+          <div className="bg-[var(--bg-muted)] border border-[var(--border)] rounded-xl p-3 space-y-2">
             <div>
-              <p className="text-[10px] text-slate-400 mb-0.5">Raw STT</p>
-              <p className="text-sm text-slate-600">{lastRawTranscription}</p>
+              <p className="text-[10px] text-[var(--text-faint)] mb-0.5">Raw STT</p>
+              <p className="text-sm text-[var(--text)] break-words">{lastRawTranscription}</p>
             </div>
             {settings.llm.enabled &&
               lastTranscription &&
               lastTranscription !== lastRawTranscription && (
-                <div className="border-t border-slate-100 pt-2">
-                  <p className="text-[10px] text-violet-400 mb-0.5">After LLM</p>
-                  <p className="text-sm text-slate-700">{lastTranscription}</p>
+                <div className="border-t border-[var(--border)] pt-2">
+                  <p className="text-[10px] text-[var(--accent-text)] mb-0.5">After LLM</p>
+                  <p className="text-sm text-[var(--text)] break-words">{lastTranscription}</p>
                 </div>
               )}
           </div>
         )}
       </div>
 
-      {/* Tip */}
-      <p className="text-[11px] text-slate-400 leading-relaxed whitespace-pre-line">
+      <p className="text-[11px] text-[var(--text-faint)] leading-relaxed whitespace-pre-line">
         {t(T.test.tip, lang)}
       </p>
     </div>
   );
 }
-
-/* ─── Main Onboarding Flow ─── */
 
 export function OnboardingFlow({
   settings,
@@ -751,22 +736,22 @@ export function OnboardingFlow({
 }) {
   const [step, setStepRaw] = useState(settings.onboarding_step || 0);
   const [version, setVersion] = useState("");
+  const [buildNumber, setBuildNumber] = useState("");
+  const [permissionsOk, setPermissionsOk] = useState(false);
   const hotkeyTouchedRef = useRef(false);
   const lang: UILanguage = settings.ui_language || "ja";
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
-  }, []);
+    getBuildNumber().then(setBuildNumber).catch(() => {});
+    applyAppearance((settings.appearance as AppAppearance) || "system");
+  }, [settings.appearance]);
 
-  // Persist step to settings so it survives app restart (e.g. after granting permissions).
-  // Uses a dedicated IPC to only update onboarding_step, avoiding race conditions
-  // with other concurrent save calls (e.g. hotkey changes from StepHotkey).
   const setStep = (s: number) => {
     setStepRaw(s);
     saveOnboardingStep(s).catch(() => {});
   };
 
-  // If resuming past the permissions page, initialize hotkeys (they weren't registered at startup)
   useEffect(() => {
     if ((settings.onboarding_step || 0) > 1) {
       initializeHotkeys().catch(() => {});
@@ -786,111 +771,123 @@ export function OnboardingFlow({
   ];
 
   const handleComplete = async () => {
-    if (onComplete) {
-      onComplete();
-    } else {
+    if (onComplete) onComplete();
+    else {
       const latest = await getSettings();
       save({ ...latest, onboarding_completed: true, onboarding_step: 0 });
     }
   };
 
+  const canGoNext = step !== 1 || permissionsOk;
+
   return (
-    <div className="flex items-center justify-center h-screen bg-white">
+    <div className="flex items-center justify-center h-screen bg-[var(--bg)] text-[var(--text)]">
       <div className="w-full max-w-md px-6">
-        {/* Language toggle */}
         <div className="flex justify-end mb-4">
-          <div className="flex gap-1 bg-slate-50 rounded-lg p-0.5">
-            {(["ja", "en"] as const).map((l) => (
-              <button
-                key={l}
-                onClick={() => setLang(l)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
-                  lang === l
-                    ? "bg-white text-slate-700 shadow-sm"
-                    : "text-slate-400 hover:text-slate-600"
-                }`}
-              >
-                {l === "ja" ? "日本語" : "English"}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            ariaLabel="Language / 言語"
+            value={lang}
+            onChange={setLang}
+            options={[
+              { value: "ja", label: "日本語" },
+              { value: "en", label: "English" },
+            ]}
+          />
         </div>
 
-        {/* Step indicator */}
-        <div className="flex items-center justify-center gap-2 mb-8">
+        <div className="flex items-center justify-center gap-2 mb-8" aria-label="Setup progress">
           {STEPS.map((_label, i) => (
             <div key={i} className="flex items-center gap-2">
               <div
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-all ${
+                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-[background-color,color] duration-150 ${
                   i === step
-                    ? "bg-violet-500 text-white"
+                    ? "bg-[var(--accent)] text-[var(--bg)]"
                     : i < step
-                      ? "bg-violet-100 text-violet-600"
-                      : "bg-slate-100 text-slate-400"
+                      ? "bg-[var(--accent-soft)] text-[var(--accent-text)]"
+                      : "bg-[var(--bg-muted)] text-[var(--text-faint)]"
                 }`}
+                aria-current={i === step ? "step" : undefined}
               >
                 {i < step ? "✓" : i + 1}
               </div>
               {i < STEPS.length - 1 && (
                 <div
-                  className={`w-8 h-0.5 ${
-                    i < step ? "bg-violet-200" : "bg-slate-100"
-                  }`}
+                  className={`w-8 h-0.5 ${i < step ? "bg-[var(--accent-ring)]" : "bg-[var(--border)]"}`}
+                  aria-hidden="true"
                 />
               )}
             </div>
           ))}
         </div>
 
-        {/* Step content */}
         <div className="mb-8">
           {step === 0 && <StepWelcome lang={lang} />}
-          {step === 1 && <StepPermissions lang={lang} />}
+          {step === 1 && (
+            <StepPermissions lang={lang} onAllGrantedChange={setPermissionsOk} />
+          )}
           {step === 2 && <StepStt settings={settings} save={save} lang={lang} />}
-          {step === 3 && <StepHotkey settings={settings} save={save} lang={lang} initialCapturing={!hotkeyTouchedRef.current} onHotkeySet={() => { hotkeyTouchedRef.current = true; }} />}
+          {step === 3 && (
+            <StepHotkey
+              settings={settings}
+              save={save}
+              lang={lang}
+              initialCapturing={!hotkeyTouchedRef.current}
+              onHotkeySet={() => {
+                hotkeyTouchedRef.current = true;
+              }}
+            />
+          )}
           {step === 4 && <StepTest settings={settings} lang={lang} />}
         </div>
 
-        {/* Navigation */}
-        <div className="flex gap-3">
-          {step > 0 && (
-            <button
-              onClick={() => setStep(step - 1)}
-              className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium bg-slate-50 text-slate-500 hover:bg-slate-100 transition-colors"
-            >
-              {t(T.nav.back, lang)}
-            </button>
+        <div className="flex flex-col gap-2">
+          {step === 1 && !permissionsOk && (
+            <p className="text-[11px] text-center text-[var(--warning)]">
+              {t(T.nav.grantPermissionsFirst, lang)}
+            </p>
           )}
-          {step < STEPS.length - 1 ? (
-            <button
-              onClick={() => {
-                // After permissions page, initialize hotkeys (triggers macOS permission dialogs)
-                if (step === 1) {
-                  initializeHotkeys().catch(() => {});
-                }
-                // After hotkey page, reload hotkeys so the test step uses the newly configured key
-                if (step === 3) {
-                  initializeHotkeys().catch(() => {});
-                }
-                setStep(step + 1);
-              }}
-              className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors"
-            >
-              {t(T.nav.next, lang)}
-            </button>
-          ) : (
-            <button
-              onClick={handleComplete}
-              className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors"
-            >
-              {t(T.nav.complete, lang)}
-            </button>
-          )}
+          <div className="flex gap-3">
+            {step > 0 && (
+              <button
+                type="button"
+                onClick={() => setStep(step - 1)}
+                className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium bg-[var(--bg-muted)] text-[var(--text-muted)] hover:text-[var(--text)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+              >
+                {t(T.nav.back, lang)}
+              </button>
+            )}
+            {step < STEPS.length - 1 ? (
+              <button
+                type="button"
+                disabled={!canGoNext}
+                onClick={() => {
+                  if (step === 1) initializeHotkeys().catch(() => {});
+                  if (step === 2 && settings.stt.preset === "local_whisper") {
+                    void ensureLocalSttServer(settings);
+                  }
+                  if (step === 3) initializeHotkeys().catch(() => {});
+                  setStep(step + 1);
+                }}
+                className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium bg-[var(--accent)] text-[var(--bg)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+              >
+                {t(T.nav.next, lang)}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleComplete}
+                className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium bg-[var(--accent)] text-[var(--bg)] hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+              >
+                {t(T.nav.complete, lang)}
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Version */}
         {version && (
-          <p className="text-center text-[11px] text-slate-300 mt-4">v{version}</p>
+          <p className="text-center text-[11px] text-[var(--text-faint)] mt-4">
+            Whisper Dictation ({version} · build {buildNumber || "—"})
+          </p>
         )}
       </div>
     </div>

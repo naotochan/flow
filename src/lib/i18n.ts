@@ -14,8 +14,11 @@ const translations = {
       back: { ja: "戻る", en: "Back" },
       next: { ja: "次へ", en: "Next" },
       complete: { ja: "セットアップ完了", en: "Complete Setup" },
+      grantPermissionsFirst: {
+        ja: "すべての権限を許可してから次へ進んでください",
+        en: "Grant all permissions before continuing",
+      },
     },
-    // Step: Welcome
     welcome: {
       title: { ja: "Whisper Dictation へようこそ", en: "Welcome to Whisper Dictation" },
       description: {
@@ -30,7 +33,6 @@ const translations = {
       ],
       getStarted: { ja: "セットアップを始めましょう", en: "Let's get started" },
     },
-    // Step: Permissions
     permissions: {
       title: { ja: "権限の設定", en: "Permissions" },
       description: {
@@ -66,8 +68,11 @@ const translations = {
         ja: "設定を変更した場合、アプリの再起動が必要になることがあります。",
         en: "You may need to restart the app after changing these settings.",
       },
+      allGranted: {
+        ja: "すべての権限が許可されています",
+        en: "All permissions granted",
+      },
     },
-    // Step: STT
     stt: {
       title: { ja: "音声認識エンジン", en: "Speech-to-Text" },
       description: {
@@ -90,7 +95,6 @@ const translations = {
         en: "You can switch to a larger model for better accuracy in Settings later.",
       },
     },
-    // Step: Hotkey
     hotkey: {
       title: { ja: "ホットキー", en: "Hotkey" },
       description: {
@@ -101,9 +105,8 @@ const translations = {
       holdToRecord: { ja: "長押しで録音", en: "Hold to Record" },
       doubleTap: { ja: "ダブルタップ", en: "Double Tap" },
       hotkeyLabel: { ja: "ホットキー", en: "Hotkey" },
-      pressAKey: { ja: "キーを押してください...", en: "Press a key..." },
+      pressAKey: { ja: "キーを押してください…", en: "Press a key…" },
     },
-    // Step: Test
     test: {
       title: { ja: "テスト", en: "Test It Out" },
       description: {
@@ -111,8 +114,8 @@ const translations = {
         en: "Try reading the text below using your hotkey. The app needs to be restarted for hotkey changes to take effect.",
       },
       tryReading: { ja: "読み上げてみましょう", en: "Try reading aloud" },
-      recording: { ja: "録音中...", en: "Recording..." },
-      processing: { ja: "処理中...", en: "Processing..." },
+      recording: { ja: "録音中…", en: "Recording…" },
+      processing: { ja: "処理中…", en: "Processing…" },
       pressToStart: {
         ja: (key: string, mode: string) =>
           `${key}（${mode === "hold" ? "長押し" : "ダブルタップ"}）で録音を開始`,
@@ -123,15 +126,27 @@ const translations = {
         ja: "音声認識のモデルは設定画面でより高精度なモデルに変更できます。また、LLM後処理を有効にすると、認識結果の修正・整形が可能です。\n※ 無音や小さな音声の場合、Whisperが「ご視聴ありがとうございました」等の定型文を誤出力することがあります。これはモデルの特性によるもので、より大きなモデルを使うことで改善されます。",
         en: "You can switch to a larger model for better accuracy in Settings later. You can also enable LLM post-processing to clean up and refine transcription results.\nNote: With silence or low audio, Whisper may output phrases like \"Thank you for watching.\" This is a known model behavior and improves with larger models.",
       },
+      startingServer: {
+        ja: "ローカルサーバーを起動しています…",
+        en: "Starting local server…",
+      },
+      serverReady: {
+        ja: "ローカルサーバー起動済み — 録音できます",
+        en: "Local server ready — you can record",
+      },
+      serverStartFailed: {
+        ja: "サーバーの起動に失敗しました。設定の「音声認識」から手動で開始してください。",
+        en: "Failed to start the server. Start it manually from Transcription in Settings.",
+      },
     },
   },
 
   // ─── Settings Panel ───
   settings: {
     appTitle: { ja: "Whisper Dictation", en: "Whisper Dictation" },
-    saving: { ja: "保存中...", en: "Saving..." },
+    saving: { ja: "保存中…", en: "Saving…" },
     setupGuide: { ja: "セットアップ画面を開く", en: "Open Setup" },
-    loading: { ja: "読み込み中...", en: "Loading..." },
+    loading: { ja: "読み込み中…", en: "Loading…" },
     nav: {
       general: { ja: "一般", en: "General" },
       transcription: { ja: "音声認識", en: "Transcription" },
@@ -143,18 +158,55 @@ const translations = {
       holdToRecord: { ja: "長押しで録音", en: "Hold to Record" },
       doubleTap: { ja: "ダブルタップ", en: "Double Tap" },
       hotkey: { ja: "ホットキー", en: "Hotkey" },
-      pressAKey: { ja: "キーを押してください...", en: "Press a key..." },
+      pressAKey: { ja: "キーを押してください…", en: "Press a key…" },
       restartRequired: {
         ja: "ホットキー変更後はアプリの再起動が必要です。",
-        en: "Restart required after changing hotkey.",
+        en: "Restart required after changing the hotkey.",
       },
+      restartNow: { ja: "今すぐ再起動", en: "Restart Now" },
       advanced: { ja: "詳細設定", en: "Advanced" },
-      language: { ja: "言語", en: "Language" },
+      recognitionLanguage: { ja: "認識言語", en: "Recognition Language" },
+      recognitionLanguageHint: {
+        ja: "音声認識に使う言語です。表示言語とは別です。",
+        en: "Language used for speech recognition. Separate from UI language.",
+      },
+      langAuto: { ja: "自動", en: "Auto" },
+      langJapanese: { ja: "日本語", en: "Japanese" },
+      langEnglish: { ja: "English", en: "English" },
       autoPaste: {
         ja: "カーソル位置に自動ペースト",
-        en: "Auto-paste at cursor position",
+        en: "Auto-paste at cursor",
       },
+      autoPasteHint: {
+        ja: "認識結果をアクティブなアプリへすぐ挿入します。",
+        en: "Insert results into the active app immediately.",
+      },
+      launchAtLogin: {
+        ja: "ログイン時に自動起動",
+        en: "Launch at login",
+      },
+      launchAtLoginHint: {
+        ja: "Macにサインインしたときアプリを起動します。",
+        en: "Start the app when you sign in to your Mac.",
+      },
+      appearance: { ja: "外観", en: "Appearance" },
+      appearanceHint: {
+        ja: "すぐに反映されます。",
+        en: "Applies immediately.",
+      },
+      appearanceSystem: { ja: "システム", en: "System" },
+      appearanceLight: { ja: "ライト", en: "Light" },
+      appearanceDark: { ja: "ダーク", en: "Dark" },
       uiLanguage: { ja: "表示言語", en: "UI Language" },
+      uiLanguageHint: {
+        ja: "設定画面とオーバーレイの言語です。",
+        en: "Language for Settings and the overlay.",
+      },
+      doubleTapInterval: { ja: "ダブルタップ間隔", en: "Double-tap interval" },
+      doubleTapHint: {
+        ja: "2回押しの間隔です。短いほど素早い操作が必要です。",
+        en: "Time window between two presses. Shorter = faster taps required.",
+      },
     },
     transcription: {
       provider: { ja: "プロバイダー", en: "Provider" },
@@ -162,21 +214,27 @@ const translations = {
       model: { ja: "モデル", en: "Model" },
       apiKey: { ja: "APIキー", en: "API Key" },
       localServer: { ja: "ローカルサーバー", en: "Local Server" },
-      checking: { ja: "確認中...", en: "Checking..." },
+      checking: { ja: "確認中…", en: "Checking…" },
       running: { ja: "実行中", en: "Running" },
       stopped: { ja: "停止中", en: "Stopped" },
+      ready: { ja: "準備完了", en: "Ready" },
+      needsSetup: { ja: "セットアップが必要", en: "Setup required" },
       downloadModel: { ja: "モデルをダウンロード", en: "Download Model" },
       modelDownloaded: { ja: "ダウンロード済み", en: "Model downloaded" },
       cancel: { ja: "キャンセル", en: "Cancel" },
       start: { ja: "開始", en: "Start" },
-      starting: { ja: "起動中...", en: "Starting..." },
+      starting: { ja: "起動中…", en: "Starting…" },
       stop: { ja: "停止", en: "Stop" },
-      stopping: { ja: "停止中...", en: "Stopping..." },
+      stopping: { ja: "停止中…", en: "Stopping…" },
       port: { ja: "ポート", en: "Port" },
       pythonPath: { ja: "Pythonパス", en: "Python Path" },
       pythonPathHint: {
         ja: "faster-whisperがインストールされたPythonのパス（例: /path/to/.venv/bin/python）",
         en: "Path to Python with faster-whisper installed (e.g. /path/to/.venv/bin/python)",
+      },
+      stopFailed: {
+        ja: (err: string) => `停止に失敗しました: ${err}`,
+        en: (err: string) => `Failed to stop: ${err}`,
       },
     },
     postProcessing: {
@@ -192,8 +250,8 @@ const translations = {
     },
     test: {
       tryReading: { ja: "読み上げてみましょう", en: "Try reading aloud" },
-      recording: { ja: "録音中...", en: "Recording..." },
-      processing: { ja: "処理中...", en: "Processing..." },
+      recording: { ja: "録音中…", en: "Recording…" },
+      processing: { ja: "処理中…", en: "Processing…" },
       pressToStart: {
         ja: (key: string, mode: string) =>
           `${key}（${mode}）で録音を開始`,
@@ -202,18 +260,30 @@ const translations = {
       },
     },
     updater: {
-      checkForUpdates: { ja: "アップデートを確認", en: "Check for Updates" },
-      checking: { ja: "確認中...", en: "Checking..." },
+      checkForUpdates: { ja: "アップデートを確認…", en: "Check for Updates…" },
+      checking: { ja: "確認中…", en: "Checking…" },
       upToDate: { ja: "最新版です", en: "Up to date" },
       availableVersion: {
         ja: (v: string) => `v${v} が利用可能`,
         en: (v: string) => `v${v} available`,
       },
       download: { ja: "ダウンロード", en: "Download" },
-      downloading: { ja: "ダウンロード中...", en: "Downloading..." },
+      downloading: { ja: "ダウンロード中…", en: "Downloading…" },
       readyToInstall: { ja: "インストール準備完了", en: "Ready to install" },
       relaunch: { ja: "再起動して更新", en: "Relaunch to Update" },
-      error: { ja: "確認に失敗しました", en: "Check failed" },
+      error: { ja: "確認に失敗しました。ネットワークを確認して再試行してください。", en: "Check failed. Verify your network and try again." },
+    },
+  },
+
+  // ─── Overlay / Status ───
+  overlay: {
+    listening: { ja: "聞き取り中…", en: "Listening…" },
+    processing: { ja: "処理中…", en: "Processing…" },
+    ready: { ja: "待機中", en: "Ready" },
+    error: { ja: "エラー", en: "Error" },
+    serverNotRunning: {
+      ja: "サーバーが起動していません",
+      en: "Server is not running",
     },
   },
 } as const;
