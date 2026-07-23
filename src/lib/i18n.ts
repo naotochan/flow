@@ -319,8 +319,19 @@ const translations = {
     postProcessing: {
       mode: { ja: "モード", en: "Mode" },
       modeHint: {
-        ja: "トレイメニューからも切り替えできます",
-        en: "Also available from the tray menu",
+        ja: "トレイメニューからも切り替えできます。ホットキーで即切替も可能です。",
+        en: "Also available from the tray menu. Assign hotkeys for instant switching.",
+      },
+      modeHotkeys: { ja: "モード用ホットキー", en: "Mode hotkeys" },
+      modeHotkeysHint: {
+        ja: "押すとそのモードに切り替えます（録音はしません）。修飾キー＋キーの組み合わせを推奨。",
+        en: "Switches mode on press (does not record). Prefer modifier + key chords.",
+      },
+      modeHotkeyUnset: { ja: "未設定", en: "Not set" },
+      modeHotkeyClear: { ja: "クリア", en: "Clear" },
+      modeHotkeyChordOnly: {
+        ja: "単独の修飾キーは使えません（録音ホットキー用です）",
+        en: "Standalone modifiers are reserved for the record hotkey",
       },
       modes: {
         raw: { ja: "そのまま", en: "Raw" },

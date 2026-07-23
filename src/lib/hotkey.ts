@@ -1,3 +1,20 @@
+/** Keys that require CGEventTap (not usable for mode hotkeys). */
+export const EVENTTAP_HOTKEYS = new Set([
+  "right_shift",
+  "left_shift",
+  "left_cmd",
+  "right_cmd",
+  "left_ctrl",
+  "right_ctrl",
+  "left_option",
+  "right_option",
+  "tab",
+]);
+
+export function isEventTapHotkey(key: string): boolean {
+  return EVENTTAP_HOTKEYS.has(key);
+}
+
 export function formatHotkeyLabel(key: string): string {
   const SPECIAL_LABELS: Record<string, string> = {
     right_shift: "Right\u00a0Shift",
