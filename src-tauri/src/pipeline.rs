@@ -52,28 +52,46 @@ pub struct ErrorEvent {
 }
 
 /// RMS threshold below which audio is considered silence.
-/// Typical speech RMS is 0.01–0.3; background noise is usually < 0.005.
-const SILENCE_RMS_THRESHOLD: f32 = 0.008;
+///
+/// Empirically, speech captured from the MacBook Pro built-in mic lands around
+/// RMS 0.005–0.015, while a genuinely silent tap is ~0.0003. The previous
+/// 0.008 threshold sat right inside the speech range and silently dropped a
+/// large fraction of real dictation. 0.002 clears true silence while letting
+/// quiet speech through; downstream hallucination filtering handles any noise
+/// that slips past.
+const SILENCE_RMS_THRESHOLD: f32 = 0.002;
 
-/// Known Whisper hallucination phrases (common in Japanese/English).
-/// If the STT result exactly matches one of these, treat it as empty.
-const HALLUCINATION_PHRASES: &[&str] = &[
-    "ご清聴ありがとうございました",
-    "ご視聴ありがとうございました",
+/// Short, ambiguous phrases that are treated as hallucinations only when they
+/// make up the ENTIRE utterance. These could conceivably be real if the user
+/// actually said just this, so we require an exact (whole-string) match.
+const HALLUCINATION_EXACT: &[&str] = &[
     "ありがとうございました",
     "ありがとうございます",
     "お疲れ様でした",
     "おやすみなさい",
-    "字幕作成:iiiiiiiiiiiiiii",
-    "字幕作成:KBS京都",
-    "Thank you for watching.",
-    "Thank you for watching!",
-    "Thanks for watching.",
-    "Thanks for watching!",
     "Thank you.",
     "Goodbye.",
     "you",
     "...",
+];
+
+/// Marker phrases that are virtually never real dictation. Whisper emits these
+/// (often with extra words prepended/appended) when fed silence or noise, e.g.
+/// "字幕をご覧いただきまして、ご視聴ありがとうございました。". We filter the
+/// result if it CONTAINS any of these anywhere, to catch such variants.
+const HALLUCINATION_CONTAINS: &[&str] = &[
+    "ご視聴ありがとうございました",
+    "ご視聴ありがとうございます",
+    "ご清聴ありがとうございました",
+    "ご清聴ありがとうございます",
+    "最後までご視聴",
+    "チャンネル登録",
+    "高評価とチャンネル",
+    "字幕をご覧",
+    "字幕作成",
+    "thank you for watching",
+    "thanks for watching",
+    "please subscribe",
 ];
 
 fn is_hallucination(text: &str) -> bool {
@@ -81,10 +99,29 @@ fn is_hallucination(text: &str) -> bool {
     if trimmed.is_empty() {
         return true;
     }
-    HALLUCINATION_PHRASES.iter().any(|&phrase| {
-        trimmed.eq_ignore_ascii_case(phrase)
-            || trimmed.trim_end_matches(&['.', '!', '。', '！'][..]) == phrase.trim_end_matches(&['.', '!', '。', '！'][..])
-    })
+
+    // Normalize: drop trailing punctuation/whitespace and lowercase
+    // (lowercasing only affects ASCII; Japanese is unchanged).
+    let normalized = trimmed
+        .trim_end_matches(&['.', '!', '?', '。', '！', '？', ' ', '　'][..])
+        .to_lowercase();
+
+    // 1. Whole-utterance exact match for ambiguous short phrases.
+    let exact_hit = HALLUCINATION_EXACT.iter().any(|phrase| {
+        let p = phrase
+            .trim_end_matches(&['.', '!', '?', '。', '！', '？'][..])
+            .to_lowercase();
+        normalized == p
+    });
+    if exact_hit {
+        return true;
+    }
+
+    // 2. Substring match for unambiguous "viewing/subtitle" markers, which
+    //    catches prefixed/suffixed hallucination variants.
+    HALLUCINATION_CONTAINS
+        .iter()
+        .any(|marker| normalized.contains(&marker.to_lowercase()))
 }
 
 pub async fn handle_recording_complete(
@@ -177,18 +214,13 @@ pub async fn handle_recording_complete(
 
     log::info!("Final text: {}", final_text);
 
-    // 6. Resize overlay and emit transcription result
-    resize_overlay_for_result(app_handle);
-    let _ = app_handle.emit(
-        "transcription-result",
-        TranscriptionResultEvent {
-            text: final_text.clone(),
-            raw_text: raw_text.clone(),
-            language: language.unwrap_or("auto").to_string(),
-        },
-    );
-
-    // 7. Copy and paste (must run on main thread for macOS enigo/HIToolbox)
+    // 6. Copy and paste FIRST, before touching the overlay window.
+    //
+    // Resizing/repositioning the overlay (step 7) can activate our app on
+    // macOS and steal key focus from the target app, so a Cmd+V issued
+    // afterwards would land in the overlay instead of where the user is
+    // typing. Pasting first avoids that race entirely.
+    // (Must run on the main thread for macOS enigo/HIToolbox.)
     if settings.auto_paste {
         let text_for_paste = final_text.clone();
         let handle = app_handle.clone();
@@ -210,6 +242,17 @@ pub async fn handle_recording_complete(
             })?
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     }
+
+    // 7. Resize overlay and emit transcription result for display.
+    resize_overlay_for_result(app_handle);
+    let _ = app_handle.emit(
+        "transcription-result",
+        TranscriptionResultEvent {
+            text: final_text.clone(),
+            raw_text: raw_text.clone(),
+            language: language.unwrap_or("auto").to_string(),
+        },
+    );
 
     // 8. Return to idle
     let _ = app_handle.emit(

@@ -1026,8 +1026,43 @@ fn parse_shortcut(key: &str) -> String {
     result.join("+")
 }
 
+/// Initialize logging to a file under ~/Library/Logs/whisper-dictation/.
+///
+/// The previous `env_logger::init()` wrote only to stderr and only when
+/// `RUST_LOG` was set — meaning a bundled .app launched from Finder produced
+/// no logs at all, making paste/post-processing failures impossible to
+/// diagnose. We now default to `info` and always write to a file, while still
+/// honoring `RUST_LOG` for developers running from a terminal.
+fn init_logging() {
+    let log_dir = dirs::home_dir()
+        .map(|h| h.join("Library/Logs/whisper-dictation"))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("whisper-dictation.log");
+
+    let mut builder = env_logger::Builder::new();
+    builder.filter_level(log::LevelFilter::Info);
+    // Let RUST_LOG override the default filter only when it is actually set,
+    // so the bundled app (RUST_LOG unset) keeps the Info default rather than
+    // being silenced.
+    if std::env::var("RUST_LOG").is_ok() {
+        builder.parse_env("RUST_LOG");
+    }
+
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        builder.target(env_logger::Target::Pipe(Box::new(file)));
+    }
+
+    let _ = builder.try_init();
+    log::info!("Logging initialized → {}", log_path.display());
+}
+
 pub fn run() {
-    env_logger::init();
+    init_logging();
 
     let settings = config::load_settings().unwrap_or_default();
     let recorder = audio::AudioRecorder::new().expect("Failed to initialize audio recorder");
