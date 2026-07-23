@@ -88,6 +88,10 @@ export interface AppSettings {
   active_mode_id: string;
   /** @default builtin presets */
   modes: PostProcessMode[];
+  /** @default true — when false, do not persist recognition history */
+  history_enabled: boolean;
+  /** @default 0 — auto-delete after N days; 0 = keep until max count */
+  history_retention_days: number;
 }
 
 export const getSettings = () => invoke<AppSettings>("get_settings");
