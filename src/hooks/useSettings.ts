@@ -8,7 +8,13 @@ export function useSettings() {
 
   useEffect(() => {
     getSettings()
-      .then(setSettings)
+      .then((s) =>
+        setSettings({
+          ...s,
+          appearance: s.appearance || "system",
+          ui_language: s.ui_language || "ja",
+        }),
+      )
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
@@ -17,8 +23,12 @@ export function useSettings() {
     async (newSettings: AppSettings) => {
       setSaving(true);
       try {
-        await saveSettings(newSettings);
-        setSettings(newSettings);
+        const normalized = {
+          ...newSettings,
+          appearance: newSettings.appearance || "system",
+        };
+        await saveSettings(normalized);
+        setSettings(normalized);
       } finally {
         setSaving(false);
       }

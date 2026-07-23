@@ -36,6 +36,8 @@ export interface LocalSttServerConfig {
   python_path: string;
 }
 
+export type AppAppearance = "system" | "light" | "dark";
+
 export interface AppSettings {
   stt: SttConfig;
   llm: LlmConfig;
@@ -47,6 +49,8 @@ export interface AppSettings {
   onboarding_completed: boolean;
   onboarding_step: number;
   ui_language: "ja" | "en";
+  /** @default "system" */
+  appearance: AppAppearance;
 }
 
 export const getSettings = () => invoke<AppSettings>("get_settings");
@@ -83,6 +87,7 @@ export const saveOnboardingStep = (step: number) =>
   invoke<void>("save_onboarding_step", { step });
 export const setHotkeyTestMode = (enabled: boolean) =>
   invoke<void>("set_hotkey_test_mode", { enabled });
+export const getBuildNumber = () => invoke<string>("get_build_number");
 
 // Preset configurations for common providers
 export const STT_PRESETS = {
