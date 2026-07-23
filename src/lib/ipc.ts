@@ -177,6 +177,11 @@ export const LLM_PRESETS = {
     base_url: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
   },
+  openrouter: {
+    provider: "openai_compatible" as const,
+    base_url: "https://openrouter.ai/api/v1",
+    model: "openai/gpt-4o-mini",
+  },
   ollama: {
     provider: "openai_compatible" as const,
     base_url: "http://localhost:11434/v1",
