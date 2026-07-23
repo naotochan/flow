@@ -27,8 +27,9 @@ Claude / OpenAI / Ollama / LM Studio による LLM ポスト処理を備える�
 
 ### 次のステップ
 - **音素材**: `start` / `done` / `error` を用意したら差し込み → その後 PR（いまは PR 出さない）
-- **P1 #2 選択範囲置換** に着手（本エントリ直後）
+- **P1 #2 選択範囲置換**: `feat/replace-selection` で実装済み（設定トグル・Cmd+C→録音→Cmd+V→クリップボード復元）
 
 ### 気づき・メモ
 - フィードバック音の PR は素材待ち。ブランチは残し、別タスクは `main` から新ブランチで進める
 - Bundle ID `com.flow.desktop` / サポート dir `com.flow.app` 済み
+- 選択範囲置換は opt-in（デフォルト OFF）。空選択時はカーソル挿入にフォールバック

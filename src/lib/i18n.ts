@@ -224,6 +224,14 @@ const translations = {
         ja: "認識結果をアクティブなアプリへすぐ挿入します。",
         en: "Insert results into the active app immediately.",
       },
+      replaceSelection: {
+        ja: "選択範囲を置換",
+        en: "Replace selection",
+      },
+      replaceSelectionHint: {
+        ja: "録音前に選択テキストをコピーし、結果で上書きします。未選択時はカーソル位置へ挿入。",
+        en: "Copies the selection before recording and pastes over it. With no selection, inserts at the cursor.",
+      },
       launchAtLogin: {
         ja: "ログイン時に自動起動",
         en: "Launch at login",

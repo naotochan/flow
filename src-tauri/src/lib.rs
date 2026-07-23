@@ -102,6 +102,8 @@ pub struct AppState {
     pub download_process: Arc<Mutex<Option<Child>>>,
     pub hotkeys_initialized: Arc<std::sync::atomic::AtomicBool>,
     pub hotkey_test_mode: Arc<std::sync::atomic::AtomicBool>,
+    /// Previous clipboard text to restore after a replace-selection session.
+    pub clipboard_backup: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[tauri::command]
@@ -928,6 +930,7 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
             let state = app_handle.state::<AppState>();
             let recorder = state.recorder.clone();
             let settings_arc = state.settings.clone();
+            let clipboard_backup = state.clipboard_backup.clone();
             let handle = app_handle.clone();
 
             tauri::async_runtime::spawn(async move {
@@ -978,6 +981,38 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                     }
                 }
 
+                // Optional: capture selection (Cmd+C) BEFORE showing overlay,
+                // so focus stays on the target app.
+                let replace_selection = {
+                    let s = settings_arc.lock().await;
+                    s.replace_selection
+                };
+                if replace_selection {
+                    let handle_for_copy = handle.clone();
+                    let backup_slot = clipboard_backup.clone();
+                    let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+                    let _ = handle_for_copy.run_on_main_thread(move || {
+                        if let Ok(mut g) = backup_slot.lock() {
+                            *g = None;
+                        }
+                        let result = match clipboard::paste::capture_selection() {
+                            Ok((previous, _selected)) => {
+                                if let Ok(mut g) = backup_slot.lock() {
+                                    *g = previous;
+                                }
+                                Ok(())
+                            }
+                            Err(e) => Err(e.to_string()),
+                        };
+                        let _ = tx.send(result);
+                    });
+                    match rx.await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => log::warn!("Selection capture failed: {}", e),
+                        Err(e) => log::warn!("Selection capture channel error: {}", e),
+                    }
+                }
+
                 // Server OK (or not using local model) — show overlay and start recording
                 let _ = handle.emit(
                     "recording-state",
@@ -991,6 +1026,7 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                     let mut rec = recorder.lock().await;
                     if let Err(e) = rec.start() {
                         log::error!("Failed to start recording: {}", e);
+                        pipeline::restore_clipboard_backup(&handle);
                         let _ = handle.emit(
                             "error",
                             pipeline::ErrorEvent {
@@ -1055,6 +1091,7 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                 .await
                 {
                     log::error!("Pipeline error: {}", e);
+                    pipeline::restore_clipboard_backup(&handle);
                     let _ = handle.emit(
                         "error",
                         pipeline::ErrorEvent {
@@ -1176,6 +1213,7 @@ pub fn run() {
         download_process: Arc::new(Mutex::new(None)),
         hotkeys_initialized: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         hotkey_test_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        clipboard_backup: Arc::new(std::sync::Mutex::new(None)),
     };
 
     tauri::Builder::default()
