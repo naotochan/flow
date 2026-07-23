@@ -64,6 +64,13 @@ pub fn copy_and_paste(text: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Simulate Cmd+Z to undo the last paste in the frontmost app.
+pub fn simulate_undo() -> Result<(), Box<dyn std::error::Error>> {
+    simulate_key('z')?;
+    log::info!("Undo simulated (Cmd+Z)");
+    Ok(())
+}
+
 /// Snapshot clipboard, Cmd+C the current selection, then read it back.
 ///
 /// Returns `(previous_clipboard_text, selected_text)`.

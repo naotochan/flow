@@ -112,6 +112,8 @@ pub struct AppState {
     pub record_shortcut: Arc<std::sync::Mutex<Option<Shortcut>>>,
     /// Global shortcuts that switch post-process mode (Pressed only).
     pub mode_shortcuts: Arc<std::sync::Mutex<Vec<(Shortcut, String)>>>,
+    /// True after a Flow paste until undo (or overwritten by the next paste).
+    pub paste_undoable: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[tauri::command]
@@ -631,7 +633,9 @@ fn paste_history_text(app: tauri::AppHandle, text: String) -> Result<(), String>
     }
     // Give focus time to return to the previous app.
     std::thread::sleep(std::time::Duration::from_millis(200));
-    clipboard::paste::copy_and_paste(&text).map_err(|e| e.to_string())
+    clipboard::paste::copy_and_paste(&text).map_err(|e| e.to_string())?;
+    tray::menu::mark_paste_undoable(&app, true);
+    Ok(())
 }
 
 /// Hayate-style window / sidebar label: `Flow (1.0.0 · build 300)`.
@@ -1475,6 +1479,7 @@ pub fn run() {
         cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         record_shortcut: Arc::new(std::sync::Mutex::new(None)),
         mode_shortcuts: Arc::new(std::sync::Mutex::new(Vec::new())),
+        paste_undoable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     tauri::Builder::default()

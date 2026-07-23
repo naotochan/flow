@@ -32,7 +32,7 @@ fn truncate_label(text: &str) -> String {
 
 /// Rebuild tray menu from current settings + history. Safe to call after each recognition.
 pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let (active_mode, history_enabled, retention_days) = app
+    let (active_mode, history_enabled, retention_days, paste_undoable) = app
         .try_state::<AppState>()
         .and_then(|state| {
             state.settings.try_lock().ok().map(|s| {
@@ -40,13 +40,19 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
                     s.active_mode_id.clone(),
                     s.history_enabled,
                     s.history_retention_days,
+                    state
+                        .paste_undoable
+                        .load(std::sync::atomic::Ordering::SeqCst),
                 )
             })
         })
-        .unwrap_or_else(|| ("format".to_string(), true, 0));
+        .unwrap_or_else(|| ("format".to_string(), true, 0, false));
 
     let settings_item = MenuItemBuilder::with_id("settings", "Settings...").build(app)?;
     let history_item = MenuItemBuilder::with_id("history", "History...").build(app)?;
+    let undo_item = MenuItemBuilder::with_id("undo-paste", "Undo Last Paste")
+        .enabled(paste_undoable)
+        .build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
     let mode_items: Vec<CheckMenuItem<tauri::Wry>> = MODE_ORDER
@@ -75,6 +81,7 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
     let mut builder = MenuBuilder::new(app)
         .item(&settings_item)
         .item(&history_item)
+        .item(&undo_item)
         .separator();
 
     for item in &mode_items {
@@ -95,6 +102,53 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
     }
 
     Ok(())
+}
+
+/// Remember whether the last Flow paste can be undone via Cmd+Z, and refresh tray.
+pub fn mark_paste_undoable(app: &AppHandle, undoable: bool) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state
+            .paste_undoable
+            .store(undoable, std::sync::atomic::Ordering::SeqCst);
+    }
+    if let Err(e) = rebuild_tray_menu(app) {
+        log::warn!("Failed to rebuild tray after paste undo flag: {}", e);
+    }
+}
+
+fn undo_last_paste(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    if !state
+        .paste_undoable
+        .swap(false, std::sync::atomic::Ordering::SeqCst)
+    {
+        return;
+    }
+
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        // Prefer returning focus to the previous app if Settings was open.
+        if let Some(window) = app.get_webview_window("settings") {
+            let _ = window.hide();
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        if let Err(e) = crate::clipboard::paste::simulate_undo() {
+            log::warn!("Undo last paste failed: {}", e);
+            // Re-enable if simulation failed so the user can retry.
+            if let Some(state) = app.try_state::<AppState>() {
+                state
+                    .paste_undoable
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        } else {
+            log::info!("Undid last paste via Cmd+Z");
+        }
+        if let Err(e) = rebuild_tray_menu(&app) {
+            log::warn!("Failed to rebuild tray after undo: {}", e);
+        }
+    });
 }
 
 pub fn set_active_mode(app: &AppHandle, mode_id: &str) {
@@ -139,6 +193,9 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         let _ = window.set_focus();
                         let _ = app.emit("open-section", "general");
                     }
+                }
+                "undo-paste" => {
+                    undo_last_paste(app);
                 }
                 "history" => {
                     if let Some(window) = app.get_webview_window("settings") {
