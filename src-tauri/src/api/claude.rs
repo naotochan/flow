@@ -59,7 +59,7 @@ async fn call_claude(
     Ok(text)
 }
 
-/// Call OpenAI-compatible API (works with LM Studio, Ollama, OpenAI, etc.)
+/// Call OpenAI-compatible API (works with LM Studio, Ollama, OpenAI, OpenRouter, etc.)
 async fn call_openai_compatible(
     raw_text: &str,
     config: &LlmConfig,
@@ -87,6 +87,13 @@ async fn call_openai_compatible(
 
     if !config.api_key.is_empty() {
         request = request.header("Authorization", format!("Bearer {}", config.api_key));
+    }
+
+    // OpenRouter ranking / attribution headers (optional but recommended).
+    if config.base_url.contains("openrouter.ai") {
+        request = request
+            .header("HTTP-Referer", "https://github.com/naotochan/whisper-dictation")
+            .header("X-Title", "Flow");
     }
 
     let response = request.send().await?;

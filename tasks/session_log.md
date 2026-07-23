@@ -91,3 +91,22 @@ Claude / OpenAI / Ollama / LM Studio による LLM ポスト処理を備える�
 
 ### 気づき・メモ
 - 「機密モード」は履歴 OFF と同等として実装（別トグルは設けず）
+
+---
+
+## 2026-07-24 07:20
+
+### 完了したこと
+- 履歴プライバシーを main にマージ（PR #7）
+- **P1 #5 OpenRouter** 実装（`feat/openrouter-llm`）
+  - LLM プリセット追加（`https://openrouter.ai/api/v1` / `openai/gpt-4o-mini`）
+  - OpenRouter 向け `HTTP-Referer` / `X-Title` ヘッダ
+  - ローカル判定を preset/URL ベースに修正（OpenAI/OpenRouter で APIキー必須表示）
+- Flow **v1.4.0** (build **304**)
+
+### 次のステップ
+- OpenRouter 動作確認 → PR / main
+- 音素材待ち `feat/feedback-sounds`
+
+### 気づき・メモ
+- OpenRouter は既存 openai_compatible パスで足りる。モデルは `provider/model` 形式
