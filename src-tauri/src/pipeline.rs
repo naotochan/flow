@@ -288,6 +288,8 @@ pub async fn handle_recording_complete(
                 e.to_string().into()
             })?
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+
+        crate::tray::menu::mark_paste_undoable(app_handle, true);
     }
 
     // Restore the user's prior clipboard (best-effort) after paste settles.
