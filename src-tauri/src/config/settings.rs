@@ -10,6 +10,10 @@ pub struct AppSettings {
     pub hotkey: HotkeyConfig,
     pub language: LanguageConfig,
     pub auto_paste: bool,
+    /// When true, Cmd+C the current selection before recording and paste over it.
+    /// Empty selection falls back to insert-at-cursor. Clipboard is restored after.
+    #[serde(default)]
+    pub replace_selection: bool,
     #[serde(default)]
     pub local_stt_server: LocalSttServerConfig,
     #[serde(default)]
@@ -347,6 +351,7 @@ impl Default for AppSettings {
                 primary: "ja".to_string(),
             },
             auto_paste: true,
+            replace_selection: false,
             local_stt_server: LocalSttServerConfig::default(),
             onboarding_completed: false,
             onboarding_step: 0,

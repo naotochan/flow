@@ -74,6 +74,8 @@ export interface AppSettings {
   hotkey: HotkeyConfig;
   language: LanguageConfig;
   auto_paste: boolean;
+  /** @default false */
+  replace_selection: boolean;
   local_stt_server: LocalSttServerConfig;
   onboarding_completed: boolean;
   onboarding_step: number;

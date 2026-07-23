@@ -7,6 +7,7 @@ function normalizeSettings(s: AppSettings): AppSettings {
     ...s,
     appearance: s.appearance || "system",
     ui_language: s.ui_language || "ja",
+    replace_selection: s.replace_selection ?? false,
     replacements: s.replacements ?? [],
     active_mode_id: s.active_mode_id || "format",
     modes: s.modes ?? [],
