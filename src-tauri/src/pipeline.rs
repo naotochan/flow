@@ -198,10 +198,13 @@ pub async fn handle_recording_complete(
         return Ok(());
     }
 
-    // 5. Post-process with LLM (optional)
-    let mut final_text = if settings.llm.enabled {
+    // 5. Post-process with LLM mode (raw skips LLM)
+    let mode = crate::config::resolve_active_mode(&settings);
+    let mut final_text = if mode.use_llm {
         let lang_str = language.unwrap_or(&settings.language.primary);
-        match claude::post_process(&raw_text, &settings.llm, lang_str).await {
+        let prompt = crate::config::render_mode_prompt(&mode.system_prompt, lang_str);
+        log::info!("LLM mode: {}", mode.id);
+        match claude::post_process(&raw_text, &settings.llm, &prompt).await {
             Ok(processed) => processed,
             Err(e) => {
                 log::warn!("LLM post-processing failed: {}, using raw text", e);

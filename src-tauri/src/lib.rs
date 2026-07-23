@@ -4,6 +4,7 @@ mod clipboard;
 mod config;
 mod history;
 mod hotkey;
+mod paths;
 mod pipeline;
 mod tray;
 
@@ -83,8 +84,8 @@ fn find_python(configured_path: &str, script_path: &PathBuf) -> PathBuf {
         }
     }
     // 4. Check setup_local_whisper's venv in Application Support
-    if let Some(config_dir) = dirs::config_dir() {
-        let candidate = config_dir.join("com.whisper-dictation.app").join("venv").join("bin").join("python");
+    {
+        let candidate = paths::app_support_dir().join("venv").join("bin").join("python");
         if candidate.exists() {
             return candidate;
         }
@@ -115,6 +116,8 @@ async fn save_settings(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let mut settings = settings;
+    config::normalize_modes(&mut settings);
     config::save_settings(&settings).map_err(|e| e.to_string())?;
 
     // Detect hotkey-related changes and extract values for reload
@@ -142,6 +145,11 @@ async fn save_settings(
     {
         reload_hotkeys(&app, &hotkey_key, activation_mode, double_tap_ms);
     }
+
+    if let Err(e) = tray::menu::rebuild_tray_menu(&app) {
+        log::warn!("Failed to refresh tray menu after settings save: {}", e);
+    }
+    let _ = app.emit("settings-changed", ());
 
     Ok(())
 }
@@ -242,10 +250,12 @@ async fn test_microphone_stt(state: tauri::State<'_, AppState>) -> Result<SttTes
         });
     }
 
-    // 4. LLM post-processing (if enabled)
-    let mut processed_text = if settings.llm.enabled {
+    // 4. LLM post-processing (active mode)
+    let mode = config::resolve_active_mode(&settings);
+    let mut processed_text = if mode.use_llm {
         let lang_str = language.unwrap_or(&settings.language.primary);
-        match api::claude::post_process(&raw_text, &settings.llm, lang_str).await {
+        let prompt = config::render_mode_prompt(&mode.system_prompt, lang_str);
+        match api::claude::post_process(&raw_text, &settings.llm, &prompt).await {
             Ok(processed) => Some(processed),
             Err(e) => {
                 log::warn!("LLM post-processing failed in test: {}", e);
@@ -583,10 +593,10 @@ fn paste_history_text(app: tauri::AppHandle, text: String) -> Result<(), String>
     clipboard::paste::copy_and_paste(&text).map_err(|e| e.to_string())
 }
 
-/// Hayate-style window / sidebar label: `Whisper Dictation (0.2.3 · build 203)`.
+/// Hayate-style window / sidebar label: `Flow (1.0.0 · build 300)`.
 fn app_title_with_build(version: &str) -> String {
     let build = option_env!("WD_BUILD_NUMBER").unwrap_or("0");
-    format!("Whisper Dictation ({version} · build {build})")
+    format!("Flow ({version} · build {build})")
 }
 
 #[tauri::command]
@@ -787,16 +797,11 @@ end if"#)
 
 #[tauri::command]
 async fn check_venv_exists() -> bool {
-    if let Some(config_dir) = dirs::config_dir() {
-        let python = config_dir
-            .join("com.whisper-dictation.app")
-            .join("venv")
-            .join("bin")
-            .join("python");
-        python.exists()
-    } else {
-        false
-    }
+    let python = paths::app_support_dir()
+        .join("venv")
+        .join("bin")
+        .join("python");
+    python.exists()
 }
 
 #[tauri::command]
@@ -804,9 +809,7 @@ async fn setup_local_whisper(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let base = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("com.whisper-dictation.app");
+    let base = paths::app_support_dir();
     let venv_path = base.join("venv");
     let python_path = venv_path.join("bin").join("python");
 
@@ -1114,7 +1117,7 @@ fn parse_shortcut(key: &str) -> String {
     result.join("+")
 }
 
-/// Initialize logging to a file under ~/Library/Logs/whisper-dictation/.
+/// Initialize logging to a file under ~/Library/Logs/Flow/.
 ///
 /// The previous `env_logger::init()` wrote only to stderr and only when
 /// `RUST_LOG` was set — meaning a bundled .app launched from Finder produced
@@ -1123,10 +1126,10 @@ fn parse_shortcut(key: &str) -> String {
 /// honoring `RUST_LOG` for developers running from a terminal.
 fn init_logging() {
     let log_dir = dirs::home_dir()
-        .map(|h| h.join("Library/Logs/whisper-dictation"))
+        .map(|h| h.join("Library/Logs").join(paths::LOG_DIR_NAME))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let _ = std::fs::create_dir_all(&log_dir);
-    let log_path = log_dir.join("whisper-dictation.log");
+    let log_path = log_dir.join(paths::LOG_FILE_NAME);
 
     let mut builder = env_logger::Builder::new();
     builder.filter_level(log::LevelFilter::Info);

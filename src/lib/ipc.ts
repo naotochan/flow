@@ -45,6 +45,28 @@ export interface ReplacementRule {
   enabled: boolean;
 }
 
+export type PostProcessModeId =
+  | "raw"
+  | "format"
+  | "email"
+  | "translate"
+  | "code";
+
+export interface PostProcessMode {
+  id: string;
+  use_llm: boolean;
+  system_prompt: string;
+  builtin: boolean;
+}
+
+export const POST_PROCESS_MODE_IDS: PostProcessModeId[] = [
+  "raw",
+  "format",
+  "email",
+  "translate",
+  "code",
+];
+
 export interface AppSettings {
   stt: SttConfig;
   llm: LlmConfig;
@@ -60,6 +82,10 @@ export interface AppSettings {
   appearance: AppAppearance;
   /** @default [] */
   replacements: ReplacementRule[];
+  /** @default "format" */
+  active_mode_id: string;
+  /** @default builtin presets */
+  modes: PostProcessMode[];
 }
 
 export const getSettings = () => invoke<AppSettings>("get_settings");

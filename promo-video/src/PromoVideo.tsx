@@ -450,7 +450,7 @@ const Scene5CTA: React.FC = () => {
         color: WHITE,
         letterSpacing: -3,
       }}>
-        Whisper Dictation
+        Flow
       </div>
 
       {/* Tagline */}

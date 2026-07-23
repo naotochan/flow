@@ -16,10 +16,7 @@ pub struct HistoryEntry {
 }
 
 fn history_path() -> PathBuf {
-    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    let dir = base.join("com.whisper-dictation.app");
-    fs::create_dir_all(&dir).ok();
-    dir.join("history.json")
+    crate::paths::app_support_dir().join("history.json")
 }
 
 pub fn load_history() -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {

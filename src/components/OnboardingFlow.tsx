@@ -885,7 +885,7 @@ export function OnboardingFlow({
 
         {version && (
           <p className="text-center text-[11px] text-[var(--text-faint)] mt-4">
-            Whisper Dictation ({version} · build {buildNumber || "—"})
+            Flow ({version} · build {buildNumber || "—"})
           </p>
         )}
       </div>

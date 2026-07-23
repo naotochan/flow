@@ -7,6 +7,9 @@ import {
   SttConfig,
   LlmConfig,
   LocalSttServerConfig,
+  PostProcessMode,
+  PostProcessModeId,
+  POST_PROCESS_MODE_IDS,
   checkSttServer,
   startSttServer,
   stopSttServer,
@@ -903,32 +906,98 @@ function TranscriptionSection({
 
 function PostProcessingSection({
   settings,
+  update,
   updateLlm,
   applyLlmPreset,
   lang,
 }: {
   settings: AppSettings;
+  update: (p: Partial<AppSettings>) => void;
   updateLlm: (p: Partial<LlmConfig>) => void;
   applyLlmPreset: (key: keyof typeof LLM_PRESETS) => void;
   lang: UILanguage;
 }) {
   const PP = TS.postProcessing;
   const isLocalLlm = settings.llm.provider === "openai_compatible";
+  const modeId = (settings.active_mode_id || "format") as PostProcessModeId;
+  const modes = settings.modes?.length
+    ? settings.modes
+    : POST_PROCESS_MODE_IDS.map((id) => ({
+        id,
+        use_llm: id !== "raw",
+        system_prompt: "",
+        builtin: true,
+      }));
+  const activeMode = modes.find((m) => m.id === modeId) ?? modes[0];
+  const useLlm = activeMode?.use_llm ?? modeId !== "raw";
+
+  const setMode = (id: PostProcessModeId) => {
+    update({
+      active_mode_id: id,
+      modes,
+      llm: { ...settings.llm, enabled: id !== "raw" },
+    });
+  };
+
+  const updateModePrompt = (prompt: string) => {
+    const next: PostProcessMode[] = modes.map((m) =>
+      m.id === modeId ? { ...m, system_prompt: prompt } : m,
+    );
+    update({ modes: next });
+  };
 
   return (
     <div className="space-y-5">
-      <label className="flex items-center gap-3 text-sm text-[var(--text)] cursor-pointer">
-        <input
-          type="checkbox"
-          checked={settings.llm.enabled}
-          onChange={(e) => updateLlm({ enabled: e.target.checked })}
-          className="accent-[var(--accent)] w-4 h-4"
-        />
-        {t(PP.enable, lang)}
-      </label>
+      <div className="space-y-2">
+        <FieldLabel>{t(PP.mode, lang)}</FieldLabel>
+        <FieldHint>{t(PP.modeHint, lang)}</FieldHint>
+        <div
+          className="grid grid-cols-3 gap-2"
+          role="radiogroup"
+          aria-label={t(PP.mode, lang)}
+        >
+          {POST_PROCESS_MODE_IDS.map((id) => {
+            const selected = modeId === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setMode(id)}
+                className={`px-2.5 py-2 rounded-lg text-sm whitespace-nowrap transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
+                  selected
+                    ? "bg-[var(--accent-soft)] text-[var(--accent-text)] font-medium"
+                    : "bg-[var(--bg-muted)] text-[var(--text-muted)] hover:text-[var(--text)]"
+                }`}
+              >
+                {t(PP.modes[id], lang)}
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-[11px] text-[var(--text-faint)] leading-relaxed">
+          {t(PP.modeDesc[modeId], lang)}
+        </p>
+      </div>
 
-      {settings.llm.enabled && (
+      {useLlm && (
         <>
+          <details className="group">
+            <summary className="text-[11px] text-[var(--text-faint)] cursor-pointer hover:text-[var(--text-muted)] transition-colors select-none">
+              {t(PP.prompt, lang)}
+            </summary>
+            <div className="mt-2 space-y-1.5">
+              <FieldHint>{t(PP.promptHint, lang)}</FieldHint>
+              <textarea
+                className={`${monoInputClass} min-h-[140px] resize-y leading-relaxed`}
+                value={activeMode?.system_prompt ?? ""}
+                onChange={(e) => updateModePrompt(e.target.value)}
+                spellCheck={false}
+              />
+            </div>
+          </details>
+
           <div className="space-y-2">
             <FieldLabel>{t(PP.provider, lang)}</FieldLabel>
             <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={t(PP.provider, lang)}>
@@ -1519,6 +1588,7 @@ export function SettingsPanel() {
         {section === "post_processing" && (
           <PostProcessingSection
             settings={settings}
+            update={update}
             updateLlm={updateLlm}
             applyLlmPreset={applyLlmPreset}
             lang={lang}
