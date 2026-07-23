@@ -1,6 +1,6 @@
 [package]
 name = "whisper-dictation"
-version = "0.2.4"
+version = "0.4.4"
 description = "Desktop speech-to-text app with Whisper API"
 authors = ["you"]
 edition = "2021"

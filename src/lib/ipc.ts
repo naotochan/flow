@@ -38,6 +38,13 @@ export interface LocalSttServerConfig {
 
 export type AppAppearance = "system" | "light" | "dark";
 
+export interface ReplacementRule {
+  id: string;
+  from: string;
+  to: string;
+  enabled: boolean;
+}
+
 export interface AppSettings {
   stt: SttConfig;
   llm: LlmConfig;
@@ -51,6 +58,8 @@ export interface AppSettings {
   ui_language: "ja" | "en";
   /** @default "system" */
   appearance: AppAppearance;
+  /** @default [] */
+  replacements: ReplacementRule[];
 }
 
 export const getSettings = () => invoke<AppSettings>("get_settings");
@@ -88,6 +97,23 @@ export const saveOnboardingStep = (step: number) =>
 export const setHotkeyTestMode = (enabled: boolean) =>
   invoke<void>("set_hotkey_test_mode", { enabled });
 export const getBuildNumber = () => invoke<string>("get_build_number");
+
+export interface HistoryEntry {
+  id: string;
+  text: string;
+  raw_text: string;
+  language: string;
+  created_at: number;
+}
+
+export const getHistory = () => invoke<HistoryEntry[]>("get_history");
+export const clearHistory = () => invoke<void>("clear_history");
+export const deleteHistoryEntry = (id: string) =>
+  invoke<void>("delete_history_entry", { id });
+export const copyHistoryText = (text: string) =>
+  invoke<void>("copy_history_text", { text });
+export const pasteHistoryText = (text: string) =>
+  invoke<void>("paste_history_text", { text });
 
 // Preset configurations for common providers
 export const STT_PRESETS = {

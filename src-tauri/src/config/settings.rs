@@ -20,6 +20,40 @@ pub struct AppSettings {
     pub ui_language: String,
     #[serde(default = "default_appearance")]
     pub appearance: String,
+    /// Phrase replacements / snippets applied after STT (+ optional LLM).
+    #[serde(default)]
+    pub replacements: Vec<ReplacementRule>,
+}
+
+/// One dictionary entry: replace all occurrences of `from` with `to`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplacementRule {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Apply enabled replacement rules (longest `from` first to avoid partial clashes).
+pub fn apply_replacements(text: &str, rules: &[ReplacementRule]) -> String {
+    let mut active: Vec<&ReplacementRule> = rules
+        .iter()
+        .filter(|r| r.enabled && !r.from.is_empty())
+        .collect();
+    active.sort_by(|a, b| b.from.len().cmp(&a.from.len()));
+
+    let mut out = text.to_string();
+    for rule in active {
+        if out.contains(&rule.from) {
+            out = out.replace(&rule.from, &rule.to);
+        }
+    }
+    out
 }
 
 fn default_ui_language() -> String {
@@ -176,6 +210,7 @@ impl Default for AppSettings {
             onboarding_step: 0,
             ui_language: "ja".to_string(),
             appearance: "system".to_string(),
+            replacements: Vec::new(),
         }
     }
 }
@@ -202,4 +237,42 @@ pub fn save_settings(settings: &AppSettings) -> Result<(), Box<dyn std::error::E
     let content = serde_json::to_string_pretty(settings)?;
     fs::write(&path, content)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(from: &str, to: &str) -> ReplacementRule {
+        ReplacementRule {
+            id: "1".into(),
+            from: from.into(),
+            to: to.into(),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn replaces_simple_phrase() {
+        let rules = vec![rule("なると", "ナルト")];
+        assert_eq!(apply_replacements("今日はなるとを見た", &rules), "今日はナルトを見た");
+    }
+
+    #[test]
+    fn longest_match_wins() {
+        let rules = vec![
+            rule("なる", "成"),
+            rule("なると", "ナルト"),
+        ];
+        assert_eq!(apply_replacements("なると", &rules), "ナルト");
+    }
+
+    #[test]
+    fn skips_disabled_and_empty_from() {
+        let mut disabled = rule("foo", "bar");
+        disabled.enabled = false;
+        let empty = rule("", "x");
+        let rules = vec![disabled, empty, rule("a", "b")];
+        assert_eq!(apply_replacements("a foo", &rules), "b foo");
+    }
 }

@@ -13,6 +13,7 @@ export function useSettings() {
           ...s,
           appearance: s.appearance || "system",
           ui_language: s.ui_language || "ja",
+          replacements: s.replacements ?? [],
         }),
       )
       .catch(console.error)
@@ -26,6 +27,7 @@ export function useSettings() {
         const normalized = {
           ...newSettings,
           appearance: newSettings.appearance || "system",
+          replacements: newSettings.replacements ?? [],
         };
         await saveSettings(normalized);
         setSettings(normalized);
