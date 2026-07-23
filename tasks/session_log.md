@@ -72,3 +72,22 @@ Claude / OpenAI / Ollama / LM Studio による LLM ポスト処理を備える�
 ### 気づき・メモ
 - 処理中（STT/LLM）のキャンセルは未対応（録音フェーズのみ）
 - `feat/feedback-sounds` は素材待ちのまま別ブランチ
+
+---
+
+## 2026-07-24 07:20
+
+### 完了したこと
+- 録音キャンセルを main にマージ（PR #6）
+- **P1 #4 履歴プライバシー** 実装（`feat/history-privacy`）
+  - `history_enabled`（オフで新規保存なし＋既存削除）
+  - `history_retention_days`（0=しない / 1 / 7 / 30）
+  - トレイ最近履歴も OFF 時は非表示
+- Flow **v1.3.0** (build **303**)
+
+### 次のステップ
+- 履歴プライバシー確認 → PR / main
+- **P1 #5 LLM プロバイダ拡充（OpenRouter）**
+
+### 気づき・メモ
+- 「機密モード」は履歴 OFF と同等として実装（別トグルは設けず）

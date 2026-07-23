@@ -305,15 +305,22 @@ pub async fn handle_recording_complete(
         },
     );
 
-    // Persist to recognition history (best-effort).
-    match crate::history::push_entry(&final_text, &raw_text, &language_label) {
-        Ok(entry) => {
-            let _ = app_handle.emit("history-updated", entry);
-            if let Err(e) = crate::tray::menu::rebuild_tray_menu(app_handle) {
-                log::warn!("Failed to refresh tray history menu: {}", e);
+    // Persist to recognition history (best-effort), unless privacy mode disables it.
+    if settings.history_enabled {
+        match crate::history::push_entry(
+            &final_text,
+            &raw_text,
+            &language_label,
+            settings.history_retention_days,
+        ) {
+            Ok(entry) => {
+                let _ = app_handle.emit("history-updated", entry);
+                if let Err(e) = crate::tray::menu::rebuild_tray_menu(app_handle) {
+                    log::warn!("Failed to refresh tray history menu: {}", e);
+                }
             }
+            Err(e) => log::warn!("Failed to save history: {}", e),
         }
-        Err(e) => log::warn!("Failed to save history: {}", e),
     }
 
     // 8. Return to idle
