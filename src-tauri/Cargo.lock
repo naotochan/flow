@@ -1339,6 +1339,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow"
+version = "1.0.0"
+dependencies = [
+ "arboard",
+ "cpal",
+ "dirs 5.0.1",
+ "enigo",
+ "env_logger",
+ "hound",
+ "log",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-process",
+ "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5972,32 +5998,6 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
-
-[[package]]
-name = "whisper-dictation"
-version = "0.4.4"
-dependencies = [
- "arboard",
- "cpal",
- "dirs 5.0.1",
- "enigo",
- "env_logger",
- "hound",
- "log",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-process",
- "tauri-plugin-shell",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tokio",
- "uuid",
-]
 
 [[package]]
 name = "winapi"

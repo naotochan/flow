@@ -23,6 +23,148 @@ pub struct AppSettings {
     /// Phrase replacements / snippets applied after STT (+ optional LLM).
     #[serde(default)]
     pub replacements: Vec<ReplacementRule>,
+    /// Active post-process mode id (`raw` / `format` / `email` / `translate` / `code`).
+    #[serde(default = "default_active_mode_id")]
+    pub active_mode_id: String,
+    /// Post-process mode presets (system prompts). Empty on load → filled with builtins.
+    #[serde(default)]
+    pub modes: Vec<PostProcessMode>,
+}
+
+/// One LLM post-processing mode (prompt preset).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostProcessMode {
+    pub id: String,
+    /// When false, skip LLM and keep STT (+ dictionary) only.
+    pub use_llm: bool,
+    /// System prompt template. Use `{language}` for the STT language hint.
+    #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default = "default_true")]
+    pub builtin: bool,
+}
+
+fn default_active_mode_id() -> String {
+    "format".to_string()
+}
+
+/// Built-in mode presets shipped with the app.
+pub fn default_modes() -> Vec<PostProcessMode> {
+    vec![
+        PostProcessMode {
+            id: "raw".into(),
+            use_llm: false,
+            system_prompt: String::new(),
+            builtin: true,
+        },
+        PostProcessMode {
+            id: "format".into(),
+            use_llm: true,
+            system_prompt: FORMAT_PROMPT.into(),
+            builtin: true,
+        },
+        PostProcessMode {
+            id: "email".into(),
+            use_llm: true,
+            system_prompt: EMAIL_PROMPT.into(),
+            builtin: true,
+        },
+        PostProcessMode {
+            id: "translate".into(),
+            use_llm: true,
+            system_prompt: TRANSLATE_PROMPT.into(),
+            builtin: true,
+        },
+        PostProcessMode {
+            id: "code".into(),
+            use_llm: true,
+            system_prompt: CODE_PROMPT.into(),
+            builtin: true,
+        },
+    ]
+}
+
+const FORMAT_PROMPT: &str = r#"You are a speech-to-text post-processor. The user dictated the following text.
+Your job:
+1. Insert proper punctuation (periods, commas, question marks)
+2. Fix capitalization
+3. Recognize spoken commands: "new line"/"改行" -> actual newline, "new paragraph"/"新しい段落" -> double newline
+4. For Japanese: insert appropriate 。、！？ punctuation
+5. For English: standard English punctuation
+6. Return ONLY the corrected text, no explanation or wrapping.
+Language: {language}"#;
+
+const EMAIL_PROMPT: &str = r#"You are a speech-to-text post-processor that turns dictation into a polished email body.
+Your job:
+1. Fix punctuation, capitalization, and spoken commands ("new line"/"改行", "new paragraph"/"新しい段落")
+2. Structure as a clear email (greeting if implied, body paragraphs, closing if present)
+3. Keep the user's meaning; do not invent recipients, facts, or subject lines
+4. Return ONLY the email text, no explanation or wrapping.
+Language: {language}"#;
+
+const TRANSLATE_PROMPT: &str = r#"You are a speech-to-text post-processor that translates dictated speech.
+Your job:
+1. Lightly clean punctuation and spoken commands ("new line"/"改行" -> newline)
+2. If the text is primarily Japanese, translate to natural English; if primarily English, translate to natural Japanese; otherwise translate to English
+3. Fix obvious STT errors while translating; do not add explanations
+4. Return ONLY the translation.
+Source language hint: {language}"#;
+
+const CODE_PROMPT: &str = r#"You are a speech-to-text post-processor for code and technical identifiers.
+Your job:
+1. Preserve code tokens, identifiers, paths, URLs, and symbols as spoken
+2. Use minimal prose punctuation; do not rewrite code as sentences
+3. Recognize spoken commands: "new line"/"改行" -> newline, "new paragraph"/"新しい段落" -> double newline
+4. Return ONLY the corrected text, no explanation or wrapping.
+Language: {language}"#;
+
+/// Resolve the active mode, falling back to `format` (or a synthetic raw).
+pub fn resolve_active_mode(settings: &AppSettings) -> PostProcessMode {
+    let modes = if settings.modes.is_empty() {
+        default_modes()
+    } else {
+        settings.modes.clone()
+    };
+    modes
+        .into_iter()
+        .find(|m| m.id == settings.active_mode_id)
+        .unwrap_or_else(|| {
+            default_modes()
+                .into_iter()
+                .find(|m| m.id == "format")
+                .expect("format mode exists")
+        })
+}
+
+/// Ensure builtin modes exist and sync `llm.enabled` with raw vs LLM modes.
+pub fn normalize_modes(settings: &mut AppSettings) {
+    if settings.modes.is_empty() {
+        settings.modes = default_modes();
+        // Migrate older installs that only had llm.enabled.
+        if !settings.llm.enabled {
+            settings.active_mode_id = "raw".into();
+        } else if settings.active_mode_id.is_empty() {
+            settings.active_mode_id = default_active_mode_id();
+        }
+    } else {
+        // Merge any missing builtin ids (forward-compat when we add modes).
+        let defaults = default_modes();
+        for def in defaults {
+            if !settings.modes.iter().any(|m| m.id == def.id) {
+                settings.modes.push(def);
+            }
+        }
+    }
+    if settings.active_mode_id.is_empty() {
+        settings.active_mode_id = default_active_mode_id();
+    }
+    let use_llm = resolve_active_mode(settings).use_llm;
+    settings.llm.enabled = use_llm;
+}
+
+/// Render `{language}` in a mode prompt template.
+pub fn render_mode_prompt(template: &str, language: &str) -> String {
+    template.replace("{language}", language)
 }
 
 /// One dictionary entry: replace all occurrences of `from` with `to`.
@@ -211,15 +353,14 @@ impl Default for AppSettings {
             ui_language: "ja".to_string(),
             appearance: "system".to_string(),
             replacements: Vec::new(),
+            active_mode_id: default_active_mode_id(),
+            modes: default_modes(),
         }
     }
 }
 
 fn settings_path() -> PathBuf {
-    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    let dir = base.join("com.whisper-dictation.app");
-    fs::create_dir_all(&dir).ok();
-    dir.join("settings.json")
+    crate::paths::app_support_dir().join("settings.json")
 }
 
 pub fn load_settings() -> Result<AppSettings, Box<dyn std::error::Error>> {
@@ -228,13 +369,16 @@ pub fn load_settings() -> Result<AppSettings, Box<dyn std::error::Error>> {
         return Ok(AppSettings::default());
     }
     let content = fs::read_to_string(&path)?;
-    let settings: AppSettings = serde_json::from_str(&content)?;
+    let mut settings: AppSettings = serde_json::from_str(&content)?;
+    normalize_modes(&mut settings);
     Ok(settings)
 }
 
 pub fn save_settings(settings: &AppSettings) -> Result<(), Box<dyn std::error::Error>> {
     let path = settings_path();
-    let content = serde_json::to_string_pretty(settings)?;
+    let mut normalized = settings.clone();
+    normalize_modes(&mut normalized);
+    let content = serde_json::to_string_pretty(&normalized)?;
     fs::write(&path, content)?;
     Ok(())
 }
@@ -274,5 +418,23 @@ mod tests {
         let empty = rule("", "x");
         let rules = vec![disabled, empty, rule("a", "b")];
         assert_eq!(apply_replacements("a foo", &rules), "b foo");
+    }
+
+    #[test]
+    fn normalize_migrates_disabled_llm_to_raw() {
+        let mut s = AppSettings::default();
+        s.modes.clear();
+        s.llm.enabled = false;
+        normalize_modes(&mut s);
+        assert_eq!(s.active_mode_id, "raw");
+        assert!(!resolve_active_mode(&s).use_llm);
+    }
+
+    #[test]
+    fn render_prompt_substitutes_language() {
+        assert_eq!(
+            render_mode_prompt("Lang: {language}", "ja"),
+            "Lang: ja"
+        );
     }
 }

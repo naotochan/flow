@@ -1,31 +1,16 @@
 use crate::config::{LlmConfig, LlmProvider};
 use serde_json::json;
 
-fn system_prompt(language: &str) -> String {
-    format!(
-        r#"You are a speech-to-text post-processor. The user dictated the following text.
-Your job:
-1. Insert proper punctuation (periods, commas, question marks)
-2. Fix capitalization
-3. Recognize spoken commands: "new line"/"改行" -> actual newline, "new paragraph"/"新しい段落" -> double newline
-4. For Japanese: insert appropriate 。、！？ punctuation
-5. For English: standard English punctuation
-6. Return ONLY the corrected text, no explanation or wrapping.
-Language: {}"#,
-        language
-    )
-}
-
 pub async fn post_process(
     raw_text: &str,
     config: &LlmConfig,
-    language: &str,
+    system_prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let prompt = system_prompt(language);
-
     match config.provider {
-        LlmProvider::Claude => call_claude(raw_text, config, &prompt).await,
-        LlmProvider::OpenaiCompatible => call_openai_compatible(raw_text, config, &prompt).await,
+        LlmProvider::Claude => call_claude(raw_text, config, system_prompt).await,
+        LlmProvider::OpenaiCompatible => {
+            call_openai_compatible(raw_text, config, system_prompt).await
+        }
     }
 }
 

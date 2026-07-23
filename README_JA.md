@@ -1,8 +1,8 @@
 [English](README.md) | **日本語**
 
-# Whisper Dictation
+# Flow
 
-Tauri で作った Mac 用の Speech-to-text デスクトップアプリです。OpenAI や LM Studio，faster-whisper-server からお好きな物をセットアップすることで，一般的な STT が使えます。
+旧称 Whisper Dictation。Tauri で作った Mac 用の Speech-to-text デスクトップアプリです。OpenAI や LM Studio，faster-whisper-server からお好きな物をセットアップすることで，一般的な STT が使えます。
 
 ## スクリーンショット
 
@@ -56,7 +56,7 @@ npm install
 npx tauri build --bundles app
 ```
 
-ビルド成果物: `src-tauri/target/release/bundle/macos/Whisper Dictation.app`
+ビルド成果物: `src-tauri/target/release/bundle/macos/Flow.app`
 
 ## セットアップ
 

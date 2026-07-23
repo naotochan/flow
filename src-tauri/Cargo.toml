@@ -1,7 +1,7 @@
 [package]
-name = "whisper-dictation"
-version = "0.4.4"
-description = "Desktop speech-to-text app with Whisper API"
+name = "flow"
+version = "1.0.0"
+description = "Desktop speech-to-text app — talk, polish, paste"
 authors = ["you"]
 edition = "2021"
 
