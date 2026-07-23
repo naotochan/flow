@@ -292,3 +292,119 @@ pub fn uninstall_key_listener() {
     }
 }
 
+// --- Escape cancel listener (separate tap; can coexist with the hotkey tap) ---
+
+const KVK_ESCAPE: i64 = 0x35;
+
+static mut CANCEL_TAP: CFMachPortRef = std::ptr::null_mut();
+static mut CANCEL_TAP_SOURCE: *mut c_void = std::ptr::null_mut();
+static mut CANCEL_SENDER: Option<mpsc::Sender<()>> = None;
+
+extern "C" fn cancel_tap_callback(
+    _proxy: CGEventTapProxy,
+    event_type: u32,
+    event: CGEventRef,
+    _user_info: *mut c_void,
+) -> CGEventRef {
+    if event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
+        log::warn!("Cancel CGEventTap disabled by timeout, re-enabling...");
+        unsafe {
+            if !CANCEL_TAP.is_null() {
+                CGEventTapEnable(CANCEL_TAP, true);
+            }
+        }
+        return event;
+    }
+
+    if event_type == K_CG_EVENT_KEY_DOWN {
+        unsafe {
+            let kc = CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE);
+            if kc == KVK_ESCAPE {
+                if let Some(ref tx) = CANCEL_SENDER {
+                    let _ = tx.send(());
+                }
+            }
+        }
+    }
+
+    event
+}
+
+/// Install a listen-only Escape tap. Invokes `on_escape` on key-down (dispatch thread).
+/// Safe to call when already installed (no-op).
+pub fn install_cancel_listener(mut on_escape: impl FnMut() + Send + 'static) {
+    unsafe {
+        if !CANCEL_TAP.is_null() {
+            return;
+        }
+    }
+
+    let (tx, rx) = mpsc::channel::<()>();
+    unsafe {
+        CANCEL_SENDER = Some(tx);
+    }
+
+    std::thread::Builder::new()
+        .name("escape-cancel-dispatch".into())
+        .spawn(move || {
+            while let Ok(()) = rx.recv() {
+                on_escape();
+            }
+        })
+        .expect("Failed to spawn escape cancel dispatch thread");
+
+    let event_mask = 1u64 << K_CG_EVENT_KEY_DOWN;
+    unsafe {
+        let tap = CGEventTapCreate(
+            K_CG_HID_EVENT_TAP,
+            K_CG_HEAD_INSERT_EVENT_TAP,
+            K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
+            event_mask,
+            cancel_tap_callback,
+            std::ptr::null_mut(),
+        );
+
+        if tap.is_null() {
+            log::error!(
+                "Failed to create Escape CGEventTap. \
+                 Grant Accessibility permission in System Settings."
+            );
+            CANCEL_SENDER = None;
+            return;
+        }
+
+        CANCEL_TAP = tap;
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0);
+        if source.is_null() {
+            log::error!("Failed to create run loop source for Escape CGEventTap");
+            CFMachPortInvalidate(tap);
+            CANCEL_TAP = std::ptr::null_mut();
+            CANCEL_SENDER = None;
+            return;
+        }
+
+        CANCEL_TAP_SOURCE = source;
+        let main_loop = CFRunLoopGetMain();
+        CFRunLoopAddSource(main_loop, source, kCFRunLoopCommonModes);
+        log::info!("Escape cancel CGEventTap installed");
+    }
+}
+
+/// Remove the Escape cancel tap. Safe if none installed.
+pub fn uninstall_cancel_listener() {
+    unsafe {
+        if !CANCEL_TAP.is_null() {
+            CGEventTapEnable(CANCEL_TAP, false);
+            if !CANCEL_TAP_SOURCE.is_null() {
+                let main_loop = CFRunLoopGetMain();
+                CFRunLoopRemoveSource(main_loop, CANCEL_TAP_SOURCE, kCFRunLoopCommonModes);
+                CANCEL_TAP_SOURCE = std::ptr::null_mut();
+            }
+            CFMachPortInvalidate(CANCEL_TAP);
+            CANCEL_TAP = std::ptr::null_mut();
+            log::info!("Escape cancel CGEventTap uninstalled");
+        }
+        CANCEL_SENDER = None;
+    }
+}
+

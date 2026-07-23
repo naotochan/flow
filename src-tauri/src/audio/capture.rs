@@ -143,6 +143,16 @@ impl AudioRecorder {
         samples
     }
 
+    /// Stop recording and discard captured audio (cancel path).
+    pub fn cancel(&mut self) {
+        self.is_recording.store(false, Ordering::SeqCst);
+        self.stream = None;
+        if let Ok(mut buf) = self.buffer.lock() {
+            buf.clear();
+        }
+        log::info!("Recording cancelled, buffer discarded");
+    }
+
     pub fn is_recording(&self) -> bool {
         self.is_recording.load(Ordering::SeqCst)
     }

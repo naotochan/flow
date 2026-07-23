@@ -363,7 +363,7 @@ const translations = {
 
   // ─── Overlay / Status ───
   overlay: {
-    listening: { ja: "聞き取り中…", en: "Listening…" },
+    listening: { ja: "聞き取り中… Escで取消", en: "Listening… Esc to cancel" },
     processing: { ja: "処理中…", en: "Processing…" },
     ready: { ja: "待機中", en: "Ready" },
     error: { ja: "エラー", en: "Error" },
