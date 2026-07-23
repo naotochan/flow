@@ -97,7 +97,7 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-fn set_active_mode(app: &AppHandle, mode_id: &str) {
+pub fn set_active_mode(app: &AppHandle, mode_id: &str) {
     let mode_id = mode_id.to_string();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {

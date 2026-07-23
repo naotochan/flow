@@ -108,6 +108,10 @@ pub struct AppState {
     pub recording_session: Arc<std::sync::atomic::AtomicBool>,
     /// Set by Escape cancel; RecordStart checks this after awaits.
     pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
+    /// Global-shortcut record key (None when record uses CGEventTap).
+    pub record_shortcut: Arc<std::sync::Mutex<Option<Shortcut>>>,
+    /// Global shortcuts that switch post-process mode (Pressed only).
+    pub mode_shortcuts: Arc<std::sync::Mutex<Vec<(Shortcut, String)>>>,
 }
 
 #[tauri::command]
@@ -125,17 +129,19 @@ async fn save_settings(
     let mut settings = settings;
     config::normalize_modes(&mut settings);
 
-    let (was_history_enabled, needs_hotkey_reload, hotkey_key, activation_mode, double_tap_ms) = {
+    let (was_history_enabled, needs_hotkey_reload, hotkey_key, activation_mode, double_tap_ms, mode_hotkeys) = {
         let current = state.settings.lock().await;
         let hotkey_changed = current.hotkey.key != settings.hotkey.key
             || current.activation_mode != settings.activation_mode
-            || current.hotkey.double_tap_ms != settings.hotkey.double_tap_ms;
+            || current.hotkey.double_tap_ms != settings.hotkey.double_tap_ms
+            || current.mode_hotkeys != settings.mode_hotkeys;
         (
             current.history_enabled,
             hotkey_changed,
             settings.hotkey.key.clone(),
             settings.activation_mode.clone(),
             settings.hotkey.double_tap_ms,
+            settings.mode_hotkeys.clone(),
         )
     };
 
@@ -163,7 +169,13 @@ async fn save_settings(
     if needs_hotkey_reload
         && state.hotkeys_initialized.load(std::sync::atomic::Ordering::SeqCst)
     {
-        reload_hotkeys(&app, &hotkey_key, activation_mode, double_tap_ms);
+        reload_hotkeys(
+            &app,
+            &hotkey_key,
+            activation_mode,
+            double_tap_ms,
+            &mode_hotkeys,
+        );
     }
 
     if let Err(e) = tray::menu::rebuild_tray_menu(&app) {
@@ -680,14 +692,26 @@ fn unregister_hotkeys(app: &tauri::AppHandle) {
 }
 
 /// Register hotkeys (CGEventTap or global-shortcut).
-/// Takes the hotkey key string directly to avoid locking the settings Mutex
+/// Takes hotkey values directly to avoid locking the settings Mutex
 /// (which would require block_on and panic inside async contexts).
-fn register_hotkeys(app: &tauri::AppHandle, hotkey_str: &str) {
+fn register_hotkeys(
+    app: &tauri::AppHandle,
+    hotkey_str: &str,
+    mode_hotkeys: &std::collections::HashMap<String, String>,
+) {
     let state = app.state::<AppState>();
 
     // Prevent double-initialization
     if state.hotkeys_initialized.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
+    }
+
+    // Clear previous shortcut routing tables
+    {
+        let mut rec = state.record_shortcut.lock().unwrap();
+        *rec = None;
+        let mut modes = state.mode_shortcuts.lock().unwrap();
+        modes.clear();
     }
 
     let use_eventtap = hotkey::rshift::is_eventtap_key(hotkey_str);
@@ -716,12 +740,78 @@ fn register_hotkeys(app: &tauri::AppHandle, hotkey_str: &str) {
         });
 
         app.global_shortcut()
-            .register(shortcut)
+            .register(shortcut.clone())
             .unwrap_or_else(|e| {
                 log::error!("Failed to register shortcut: {}", e);
             });
 
+        {
+            let mut rec = state.record_shortcut.lock().unwrap();
+            *rec = Some(shortcut);
+        }
+
         log::info!("Global shortcut registered: {}", shortcut_str);
+    }
+
+    // Mode switch shortcuts (global-shortcut chords / function keys only).
+    for (mode_id, key) in mode_hotkeys {
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        if hotkey::rshift::is_eventtap_key(key) {
+            log::warn!(
+                "Mode hotkey for '{}' uses EventTap-only key '{}'; skipped",
+                mode_id,
+                key
+            );
+            continue;
+        }
+        if key == hotkey_str {
+            log::warn!(
+                "Mode hotkey for '{}' collides with record hotkey; skipped",
+                mode_id
+            );
+            continue;
+        }
+        let shortcut_str = parse_shortcut(key);
+        let Ok(shortcut) = shortcut_str.parse::<Shortcut>() else {
+            log::warn!(
+                "Failed to parse mode hotkey '{}' for '{}'",
+                key,
+                mode_id
+            );
+            continue;
+        };
+        // Skip duplicate of already-registered record shortcut
+        {
+            let rec = state.record_shortcut.lock().unwrap();
+            if rec.as_ref() == Some(&shortcut) {
+                log::warn!(
+                    "Mode hotkey for '{}' collides with record shortcut; skipped",
+                    mode_id
+                );
+                continue;
+            }
+        }
+        if let Err(e) = app.global_shortcut().register(shortcut.clone()) {
+            log::error!(
+                "Failed to register mode hotkey '{}' → {}: {}",
+                mode_id,
+                shortcut_str,
+                e
+            );
+            continue;
+        }
+        {
+            let mut modes = state.mode_shortcuts.lock().unwrap();
+            modes.push((shortcut, mode_id.clone()));
+        }
+        log::info!(
+            "Mode hotkey registered: {} → {}",
+            mode_id,
+            shortcut_str
+        );
     }
 
     // Escape cancels an in-progress recording (listen-only; does not swallow Esc).
@@ -738,6 +828,7 @@ fn reload_hotkeys(
     hotkey_key: &str,
     activation_mode: config::ActivationMode,
     double_tap_ms: u64,
+    mode_hotkeys: &std::collections::HashMap<String, String>,
 ) {
     unregister_hotkeys(app);
 
@@ -747,7 +838,7 @@ fn reload_hotkeys(
         detector.update_mode(activation_mode, double_tap_ms);
     }
 
-    register_hotkeys(app, hotkey_key);
+    register_hotkeys(app, hotkey_key, mode_hotkeys);
     log::info!("Hotkeys reloaded");
 }
 
@@ -781,12 +872,19 @@ async fn initialize_hotkeys(app: tauri::AppHandle) -> Result<(), String> {
     let hotkey_key = settings.hotkey.key.clone();
     let activation_mode = settings.activation_mode.clone();
     let double_tap_ms = settings.hotkey.double_tap_ms;
+    let mode_hotkeys = settings.mode_hotkeys.clone();
     drop(settings);
 
     if state.hotkeys_initialized.load(std::sync::atomic::Ordering::SeqCst) {
-        reload_hotkeys(&app, &hotkey_key, activation_mode, double_tap_ms);
+        reload_hotkeys(
+            &app,
+            &hotkey_key,
+            activation_mode,
+            double_tap_ms,
+            &mode_hotkeys,
+        );
     } else {
-        register_hotkeys(&app, &hotkey_key);
+        register_hotkeys(&app, &hotkey_key, &mode_hotkeys);
     }
     Ok(())
 }
@@ -1362,6 +1460,7 @@ pub fn run() {
 
     let onboarding_completed = settings.onboarding_completed;
     let startup_hotkey = settings.hotkey.key.clone();
+    let startup_mode_hotkeys = settings.mode_hotkeys.clone();
 
     let app_state = AppState {
         settings: Arc::new(Mutex::new(settings)),
@@ -1374,6 +1473,8 @@ pub fn run() {
         clipboard_backup: Arc::new(std::sync::Mutex::new(None)),
         recording_session: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        record_shortcut: Arc::new(std::sync::Mutex::new(None)),
+        mode_shortcuts: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
     tauri::Builder::default()
@@ -1390,10 +1491,33 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    let _ = shortcut;
                     let state = app.state::<AppState>();
-                    let mut detector = state.detector.lock().unwrap();
 
+                    // Mode hotkeys: switch active mode on Pressed only.
+                    {
+                        let modes = state.mode_shortcuts.lock().unwrap();
+                        if let Some((_, mode_id)) =
+                            modes.iter().find(|(s, _)| s == shortcut)
+                        {
+                            if event.state == ShortcutState::Pressed {
+                                let mode_id = mode_id.clone();
+                                drop(modes);
+                                tray::menu::set_active_mode(app, &mode_id);
+                            }
+                            return;
+                        }
+                    }
+
+                    // Record hotkey via global-shortcut (EventTap path is separate).
+                    let is_record = {
+                        let rec = state.record_shortcut.lock().unwrap();
+                        rec.as_ref() == Some(shortcut)
+                    };
+                    if !is_record {
+                        return;
+                    }
+
+                    let mut detector = state.detector.lock().unwrap();
                     match event.state {
                         ShortcutState::Pressed => {
                             if let Some(evt) = detector.on_key_down() {
@@ -1452,7 +1576,7 @@ pub fn run() {
             // Otherwise, defer until the user passes the permissions page
             // (triggered via the initialize_hotkeys IPC command).
             if onboarding_completed {
-                register_hotkeys(app.handle(), &startup_hotkey);
+                register_hotkeys(app.handle(), &startup_hotkey, &startup_mode_hotkeys);
             } else {
                 log::info!("Onboarding not completed — deferring hotkey registration");
             }
