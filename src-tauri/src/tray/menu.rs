@@ -32,16 +32,18 @@ fn truncate_label(text: &str) -> String {
 
 /// Rebuild tray menu from current settings + history. Safe to call after each recognition.
 pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let active_mode = app
+    let (active_mode, history_enabled, retention_days) = app
         .try_state::<AppState>()
         .and_then(|state| {
-            state
-                .settings
-                .try_lock()
-                .ok()
-                .map(|s| s.active_mode_id.clone())
+            state.settings.try_lock().ok().map(|s| {
+                (
+                    s.active_mode_id.clone(),
+                    s.history_enabled,
+                    s.history_retention_days,
+                )
+            })
         })
-        .unwrap_or_else(|| "format".to_string());
+        .unwrap_or_else(|| ("format".to_string(), true, 0));
 
     let settings_item = MenuItemBuilder::with_id("settings", "Settings...").build(app)?;
     let history_item = MenuItemBuilder::with_id("history", "History...").build(app)?;
@@ -56,15 +58,19 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let recent = crate::history::load_history().unwrap_or_default();
-    let recent_items: Vec<MenuItem<tauri::Wry>> = recent
-        .into_iter()
-        .take(TRAY_RECENT_COUNT)
-        .map(|entry| {
-            let id = format!("history-copy:{}", entry.id);
-            MenuItemBuilder::with_id(&id, truncate_label(&entry.text)).build(app)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let recent_items: Vec<MenuItem<tauri::Wry>> = if history_enabled {
+        crate::history::load_history_pruned(retention_days)
+            .unwrap_or_default()
+            .into_iter()
+            .take(TRAY_RECENT_COUNT)
+            .map(|entry| {
+                let id = format!("history-copy:{}", entry.id);
+                MenuItemBuilder::with_id(&id, truncate_label(&entry.text)).build(app)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
 
     let mut builder = MenuBuilder::new(app)
         .item(&settings_item)

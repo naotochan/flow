@@ -1115,13 +1115,27 @@ function formatHistoryTime(ms: number, lang: UILanguage): string {
   }
 }
 
-function HistorySection({ lang }: { lang: UILanguage }) {
+function HistorySection({
+  settings,
+  update,
+  lang,
+}: {
+  settings: AppSettings;
+  update: (patch: Partial<AppSettings>) => void;
+  lang: UILanguage;
+}) {
   const H = TS.history;
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
+  const enabled = settings.history_enabled ?? true;
+  const retention = settings.history_retention_days ?? 0;
 
   const reload = () => {
+    if (!enabled) {
+      setEntries([]);
+      return;
+    }
     getHistory()
       .then(setEntries)
       .catch(() => setEntries([]));
@@ -1133,7 +1147,7 @@ function HistorySection({ lang }: { lang: UILanguage }) {
     listen("history-updated", () => reload()).then((u) => unlisteners.push(u));
     listen("transcription-result", () => reload()).then((u) => unlisteners.push(u));
     return () => unlisteners.forEach((fn) => fn());
-  }, []);
+  }, [enabled]);
 
   const onCopy = async (entry: HistoryEntry) => {
     setBusyId(entry.id);
@@ -1178,11 +1192,59 @@ function HistorySection({ lang }: { lang: UILanguage }) {
     }
   };
 
+  const onToggleEnabled = (checked: boolean) => {
+    if (
+      !checked &&
+      entries.length > 0 &&
+      !window.confirm(t(H.disableConfirm, lang))
+    ) {
+      return;
+    }
+    update({ history_enabled: checked });
+    if (!checked) setEntries([]);
+  };
+
   return (
     <div className="space-y-4">
+      <label className="flex items-start gap-3 text-sm text-[var(--text)] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onToggleEnabled(e.target.checked)}
+          className="accent-[var(--accent)] w-4 h-4 mt-0.5"
+        />
+        <span>
+          <span className="font-medium">{t(H.saveHistory, lang)}</span>
+          <span className="block text-[11px] text-[var(--text-faint)] mt-0.5">
+            {t(H.saveHistoryHint, lang)}
+          </span>
+        </span>
+      </label>
+
+      {enabled && (
+        <SettingsRow
+          title={t(H.retention, lang)}
+          description={t(H.retentionHint, lang)}
+        >
+          <SegmentedControl
+            ariaLabel={t(H.retention, lang)}
+            value={String(retention)}
+            onChange={(value) =>
+              update({ history_retention_days: Number(value) })
+            }
+            options={[
+              { value: "0", label: t(H.retentionForever, lang) },
+              { value: "1", label: t(H.retention1d, lang) },
+              { value: "7", label: t(H.retention7d, lang) },
+              { value: "30", label: t(H.retention30d, lang) },
+            ]}
+          />
+        </SettingsRow>
+      )}
+
       <div className="flex items-start justify-between gap-3">
         <FieldHint>{t(H.pasteHint, lang)}</FieldHint>
-        {entries.length > 0 && (
+        {enabled && entries.length > 0 && (
           <button
             type="button"
             onClick={onClear}
@@ -1193,7 +1255,11 @@ function HistorySection({ lang }: { lang: UILanguage }) {
         )}
       </div>
 
-      {entries.length === 0 ? (
+      {!enabled ? (
+        <p className="text-sm text-[var(--text-muted)] bg-[var(--bg-muted)] border border-[var(--border)] rounded-lg px-3 py-4">
+          {t(H.disabled, lang)}
+        </p>
+      ) : entries.length === 0 ? (
         <p className="text-sm text-[var(--text-muted)] bg-[var(--bg-muted)] border border-[var(--border)] rounded-lg px-3 py-4">
           {t(H.empty, lang)}
         </p>
@@ -1612,7 +1678,9 @@ export function SettingsPanel() {
         {section === "dictionary" && (
           <DictionarySection settings={settings} update={update} lang={lang} />
         )}
-        {section === "history" && <HistorySection lang={lang} />}
+        {section === "history" && (
+          <HistorySection settings={settings} update={update} lang={lang} />
+        )}
         {section === "test" && <TestSection settings={settings} lang={lang} />}
       </main>
     </div>

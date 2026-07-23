@@ -181,6 +181,34 @@ const translations = {
         ja: "まだ認識履歴がありません。ホットキーで録音するとここに残ります。",
         en: "No recognition history yet. Dictations will appear here.",
       },
+      disabled: {
+        ja: "履歴の保存はオフです。認識結果は端末に残りません。",
+        en: "History saving is off. Dictations are not kept on this device.",
+      },
+      saveHistory: {
+        ja: "認識履歴を保存",
+        en: "Save recognition history",
+      },
+      saveHistoryHint: {
+        ja: "オフにすると既存の履歴も削除されます（プライバシー）。",
+        en: "Turning off also clears existing history (privacy).",
+      },
+      disableConfirm: {
+        ja: "履歴の保存をオフにし、既存の履歴をすべて削除しますか？",
+        en: "Turn off history and delete all existing entries?",
+      },
+      retention: {
+        ja: "自動削除",
+        en: "Auto-delete",
+      },
+      retentionHint: {
+        ja: "古い履歴を自動で消します。件数上限（50件）は常に適用されます。",
+        en: "Remove older entries automatically. The 50-item cap always applies.",
+      },
+      retentionForever: { ja: "しない", en: "Never" },
+      retention1d: { ja: "1日", en: "1 day" },
+      retention7d: { ja: "7日", en: "7 days" },
+      retention30d: { ja: "30日", en: "30 days" },
       copy: { ja: "コピー", en: "Copy" },
       paste: { ja: "ペースト", en: "Paste" },
       delete: { ja: "削除", en: "Delete" },

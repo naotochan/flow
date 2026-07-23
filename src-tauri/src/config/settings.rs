@@ -33,6 +33,12 @@ pub struct AppSettings {
     /// Post-process mode presets (system prompts). Empty on load → filled with builtins.
     #[serde(default)]
     pub modes: Vec<PostProcessMode>,
+    /// When false, do not persist recognition results (and clear existing on disable).
+    #[serde(default = "default_true")]
+    pub history_enabled: bool,
+    /// Auto-delete entries older than this many days. `0` = keep until max count.
+    #[serde(default)]
+    pub history_retention_days: u32,
 }
 
 /// One LLM post-processing mode (prompt preset).
@@ -360,6 +366,8 @@ impl Default for AppSettings {
             replacements: Vec::new(),
             active_mode_id: default_active_mode_id(),
             modes: default_modes(),
+            history_enabled: true,
+            history_retention_days: 0,
         }
     }
 }
