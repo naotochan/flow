@@ -5,7 +5,8 @@
   "scripts": {
     "start": "npx remotion preview",
     "render": "npx remotion render PromoVideo out/promo.mp4 --codec h264",
-    "render:gif": "npx remotion render PromoVideo out/promo.gif --codec gif"
+    "render:gif": "npx remotion render PromoVideo out/promo.gif --codec gif",
+    "render:hero": "npx remotion still HeroImage ../docs/demo/usage.png"
   },
   "dependencies": {
     "remotion": "^4.0.0",
