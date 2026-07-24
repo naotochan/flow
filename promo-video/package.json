@@ -6,7 +6,9 @@
     "start": "npx remotion preview",
     "render": "npx remotion render PromoVideo out/promo.mp4 --codec h264",
     "render:gif": "npx remotion render PromoVideo out/promo.gif --codec gif",
-    "render:hero": "npx remotion still HeroImage ../docs/demo/usage.png"
+    "render:hero": "npm run render:hero:ja && npm run render:hero:en",
+    "render:hero:ja": "npx remotion still HeroImageJa ../docs/demo/usage-ja.png",
+    "render:hero:en": "npx remotion still HeroImageEn ../docs/demo/usage-en.png"
   },
   "dependencies": {
     "remotion": "^4.0.0",

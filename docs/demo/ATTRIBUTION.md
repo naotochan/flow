@@ -1,11 +1,11 @@
 # Demo assets
 
-## `usage.png`
+## `usage-ja.png` / `usage-en.png`
 
-README 用ヒーロー画像。`promo-video` の `HeroImage` コンポジションから生成:
+README 用ヒーロー画像（日本語・英語）。`promo-video` から生成:
 
 ```bash
 cd promo-video && npm run render:hero
 ```
 
-内容: メモアプリへのペースト + ホットキー（⌥）+ 録音ピル（Listening）。
+内容: メモ / Notes へのペースト + ホットキー（⌥）+ 録音ピル。
