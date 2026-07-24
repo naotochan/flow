@@ -1,5 +1,7 @@
 use tauri::{
-    menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder},
+    menu::{
+        CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder,
+    },
     AppHandle, Emitter, Manager,
 };
 
@@ -9,22 +11,64 @@ use crate::AppState;
 const TRAY_RECENT_COUNT: usize = 8;
 const TRAY_LABEL_MAX: usize = 40;
 
-const MODE_ORDER: &[(&str, &str)] = &[
-    ("raw", "Raw"),
-    ("format", "Format"),
-    ("email", "Email"),
-    ("translate", "Translate"),
-    ("code", "Code"),
-];
+const MODE_ORDER: &[&str] = &["raw", "format", "email", "translate", "code"];
 
-fn truncate_label(text: &str) -> String {
+struct TrayStrings {
+    settings: &'static str,
+    history: &'static str,
+    history_show_all: &'static str,
+    undo_paste: &'static str,
+    quit: &'static str,
+    empty: &'static str,
+}
+
+fn tray_strings(ui_language: &str) -> TrayStrings {
+    if ui_language == "en" {
+        TrayStrings {
+            settings: "Settings...",
+            history: "History",
+            history_show_all: "Show All History...",
+            undo_paste: "Undo Last Paste",
+            quit: "Quit",
+            empty: "(empty)",
+        }
+    } else {
+        TrayStrings {
+            settings: "設定...",
+            history: "履歴",
+            history_show_all: "履歴をすべて表示...",
+            undo_paste: "直前のペーストを取り消す",
+            quit: "終了",
+            empty: "(空)",
+        }
+    }
+}
+
+fn mode_label(ui_language: &str, mode_id: &str) -> String {
+    let label = match (ui_language == "en", mode_id) {
+        (true, "raw") => "Raw",
+        (true, "format") => "Format",
+        (true, "email") => "Email",
+        (true, "translate") => "Translate",
+        (true, "code") => "Code",
+        (false, "raw") => "そのまま",
+        (false, "format") => "整形",
+        (false, "email") => "メール",
+        (false, "translate") => "翻訳",
+        (false, "code") => "コード",
+        _ => mode_id,
+    };
+    label.to_string()
+}
+
+fn truncate_label(text: &str, empty_label: &str) -> String {
     let trimmed = text.trim().replace('\n', " ");
     let mut chars = trimmed.chars();
     let short: String = chars.by_ref().take(TRAY_LABEL_MAX).collect();
     if chars.next().is_some() {
         format!("{short}…")
     } else if short.is_empty() {
-        "(empty)".to_string()
+        empty_label.to_string()
     } else {
         short
     }
@@ -32,7 +76,7 @@ fn truncate_label(text: &str) -> String {
 
 /// Rebuild tray menu from current settings + history. Safe to call after each recognition.
 pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let (active_mode, history_enabled, retention_days, paste_undoable) = app
+    let (active_mode, history_enabled, retention_days, paste_undoable, ui_language) = app
         .try_state::<AppState>()
         .and_then(|state| {
             state.settings.try_lock().ok().map(|s| {
@@ -43,22 +87,34 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
                     state
                         .paste_undoable
                         .load(std::sync::atomic::Ordering::SeqCst),
+                    s.ui_language.clone(),
                 )
             })
         })
-        .unwrap_or_else(|| ("format".to_string(), true, 0, false));
+        .unwrap_or_else(|| {
+            (
+                "format".to_string(),
+                true,
+                0,
+                false,
+                "ja".to_string(),
+            )
+        });
 
-    let settings_item = MenuItemBuilder::with_id("settings", "Settings...").build(app)?;
-    let history_item = MenuItemBuilder::with_id("history", "History...").build(app)?;
-    let undo_item = MenuItemBuilder::with_id("undo-paste", "Undo Last Paste")
+    let t = tray_strings(&ui_language);
+
+    let settings_item = MenuItemBuilder::with_id("settings", t.settings).build(app)?;
+    let undo_item = MenuItemBuilder::with_id("undo-paste", t.undo_paste)
         .enabled(paste_undoable)
         .build(app)?;
-    let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", t.quit).build(app)?;
+    let history_show_all =
+        MenuItemBuilder::with_id("history-show-all", t.history_show_all).build(app)?;
 
     let mode_items: Vec<CheckMenuItem<tauri::Wry>> = MODE_ORDER
         .iter()
-        .map(|(id, label)| {
-            CheckMenuItemBuilder::with_id(format!("mode:{id}"), *label)
+        .map(|id| {
+            CheckMenuItemBuilder::with_id(format!("mode:{id}"), mode_label(&ui_language, id))
                 .checked(active_mode == *id)
                 .build(app)
         })
@@ -71,28 +127,38 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
             .take(TRAY_RECENT_COUNT)
             .map(|entry| {
                 let id = format!("history-copy:{}", entry.id);
-                MenuItemBuilder::with_id(&id, truncate_label(&entry.text)).build(app)
+                MenuItemBuilder::with_id(&id, truncate_label(&entry.text, t.empty)).build(app)
             })
             .collect::<Result<Vec<_>, _>>()?
     } else {
         Vec::new()
     };
 
+    // History submenu: hover reveals recent entries (macOS menu bar pattern).
+    let mut history_builder = SubmenuBuilder::with_id(app, "history", t.history);
+    if recent_items.is_empty() {
+        let empty_item = MenuItemBuilder::with_id("history-empty", t.empty)
+            .enabled(false)
+            .build(app)?;
+        history_builder = history_builder.item(&empty_item);
+    } else {
+        for item in &recent_items {
+            history_builder = history_builder.item(item);
+        }
+    }
+    let history_submenu = history_builder
+        .separator()
+        .item(&history_show_all)
+        .build()?;
+
     let mut builder = MenuBuilder::new(app)
         .item(&settings_item)
-        .item(&history_item)
+        .item(&history_submenu)
         .item(&undo_item)
         .separator();
 
     for item in &mode_items {
         builder = builder.item(item);
-    }
-
-    if !recent_items.is_empty() {
-        builder = builder.separator();
-        for item in &recent_items {
-            builder = builder.item(item);
-        }
     }
 
     let menu = builder.separator().item(&quit_item).build()?;
@@ -180,6 +246,14 @@ pub fn set_active_mode(app: &AppHandle, mode_id: &str) {
     });
 }
 
+fn open_history_settings(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = app.emit("open-section", "history");
+    }
+}
+
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     rebuild_tray_menu(app)?;
 
@@ -197,12 +271,8 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 "undo-paste" => {
                     undo_last_paste(app);
                 }
-                "history" => {
-                    if let Some(window) = app.get_webview_window("settings") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        let _ = app.emit("open-section", "history");
-                    }
+                "history-show-all" => {
+                    open_history_settings(app);
                 }
                 "quit" => {
                     app.exit(0);

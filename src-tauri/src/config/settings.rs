@@ -389,7 +389,37 @@ pub fn load_settings() -> Result<AppSettings, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(&path)?;
     let mut settings: AppSettings = serde_json::from_str(&content)?;
     normalize_modes(&mut settings);
+    if migrate_legacy_python_path(&mut settings) {
+        let _ = save_settings(&settings);
+    }
     Ok(settings)
+}
+
+/// Rewrite absolute python_path left over from the Whisper Dictation → Flow rename.
+/// Directory migration alone leaves the old path string in settings.json, so STT
+/// falls back to system Python (no faster_whisper) while /health still looks fine.
+fn migrate_legacy_python_path(settings: &mut AppSettings) -> bool {
+    let old = &settings.local_stt_server.python_path;
+    if old.is_empty() || !old.contains(crate::paths::LEGACY_APP_SUPPORT_DIR) {
+        return false;
+    }
+    let fixed = old.replace(
+        crate::paths::LEGACY_APP_SUPPORT_DIR,
+        crate::paths::APP_SUPPORT_DIR,
+    );
+    let fixed_path = PathBuf::from(&fixed);
+    let fallback = crate::paths::app_support_dir()
+        .join("venv")
+        .join("bin")
+        .join("python");
+    settings.local_stt_server.python_path = if fixed_path.exists() {
+        fixed
+    } else if fallback.exists() {
+        fallback.to_string_lossy().to_string()
+    } else {
+        String::new()
+    };
+    true
 }
 
 pub fn save_settings(settings: &AppSettings) -> Result<(), Box<dyn std::error::Error>> {

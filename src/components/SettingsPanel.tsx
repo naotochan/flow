@@ -924,25 +924,31 @@ function ModeHotkeyRow({
   value,
   recordHotkey,
   lang,
+  capturing,
+  onCapturingChange,
   onChange,
 }: {
   label: string;
   value: string;
   recordHotkey: string;
   lang: UILanguage;
+  capturing: boolean;
+  onCapturingChange: (capturing: boolean) => void;
   onChange: (key: string | null) => void;
 }) {
   const PP = TS.postProcessing;
-  const [capturing, setCapturing] = useState(false);
   const [warn, setWarn] = useState("");
 
   useEffect(() => {
-    if (!capturing) return;
+    if (!capturing) {
+      setWarn("");
+      return;
+    }
     const handler = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
       if (e.code === "Escape") {
-        setCapturing(false);
+        onCapturingChange(false);
         setWarn("");
         return;
       }
@@ -958,11 +964,11 @@ function ModeHotkeyRow({
       }
       onChange(key);
       setWarn("");
-      setCapturing(false);
+      onCapturingChange(false);
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [capturing, lang, onChange, recordHotkey]);
+  }, [capturing, lang, onChange, onCapturingChange, recordHotkey]);
 
   return (
     <li className="space-y-0.5">
@@ -975,7 +981,7 @@ function ModeHotkeyRow({
           aria-label={`${label} hotkey`}
           onClick={() => {
             setWarn("");
-            setCapturing(true);
+            onCapturingChange(true);
           }}
           className={`flex-1 min-w-0 px-2.5 py-1.5 rounded-md text-xs font-medium text-left transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
             capturing
@@ -1054,6 +1060,7 @@ function PostProcessingSection({
   };
 
   const modeHotkeys = settings.mode_hotkeys ?? {};
+  const [capturingModeId, setCapturingModeId] = useState<PostProcessModeId | null>(null);
 
   const setModeHotkey = (id: PostProcessModeId, key: string | null) => {
     const next = { ...modeHotkeys };
@@ -1111,6 +1118,8 @@ function PostProcessingSection({
               value={modeHotkeys[id] || ""}
               recordHotkey={settings.hotkey.key}
               lang={lang}
+              capturing={capturingModeId === id}
+              onCapturingChange={(next) => setCapturingModeId(next ? id : null)}
               onChange={(key) => setModeHotkey(id, key)}
             />
           ))}
