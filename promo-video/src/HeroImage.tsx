@@ -6,9 +6,39 @@ const VIOLET = "#7C3AED";
 const TEXT_DARK = "#1E1B4B";
 const TEXT_MID = "#4C1D95";
 const WHITE = "#FFFFFF";
-
-const SAMPLE_JA = "明日の午後3時から会議があります。資料の準備をお願いします。";
 const BAR_HEIGHTS = [0.4, 0.7, 1, 0.6, 0.85];
+
+type Locale = "ja" | "en";
+
+const COPY: Record<
+  Locale,
+  {
+    windowTitle: string;
+    sample: string;
+    hold: string;
+    record: string;
+    listening: string;
+    sampleFont: string;
+  }
+> = {
+  ja: {
+    windowTitle: "メモ — 無題",
+    sample: "明日の午後3時から会議があります。資料の準備をお願いします。",
+    hold: "押している間",
+    record: "録音",
+    listening: "録音中",
+    sampleFont: "Georgia, 'Hiragino Mincho ProN', serif",
+  },
+  en: {
+    windowTitle: "Notes — Untitled",
+    sample:
+      "We have a meeting tomorrow at 3 PM. Please prepare the documents in advance.",
+    hold: "Hold",
+    record: "to record",
+    listening: "Listening",
+    sampleFont: "Georgia, 'Times New Roman', serif",
+  },
+};
 
 function WaveformBars() {
   return (
@@ -30,7 +60,9 @@ function WaveformBars() {
 }
 
 /** README hero — press hotkey, speak, paste into any app. */
-export const HeroImage: React.FC = () => {
+export const HeroImage: React.FC<{ locale: Locale }> = ({ locale }) => {
+  const copy = COPY[locale];
+
   return (
     <AbsoluteFill
       style={{
@@ -39,7 +71,6 @@ export const HeroImage: React.FC = () => {
           "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif",
       }}
     >
-      {/* Soft blobs */}
       <div
         style={{
           position: "absolute",
@@ -63,7 +94,6 @@ export const HeroImage: React.FC = () => {
         }}
       />
 
-      {/* Mock app window */}
       <div
         style={{
           position: "absolute",
@@ -101,7 +131,7 @@ export const HeroImage: React.FC = () => {
               fontWeight: 500,
             }}
           >
-            メモ — 無題
+            {copy.windowTitle}
           </span>
         </div>
 
@@ -111,10 +141,10 @@ export const HeroImage: React.FC = () => {
             fontSize: 26,
             lineHeight: 1.65,
             color: TEXT_DARK,
-            fontFamily: "Georgia, 'Hiragino Mincho ProN', serif",
+            fontFamily: copy.sampleFont,
           }}
         >
-          {SAMPLE_JA}
+          {copy.sample}
           <span
             style={{
               display: "inline-block",
@@ -128,7 +158,6 @@ export const HeroImage: React.FC = () => {
         </div>
       </div>
 
-      {/* Hotkey callout */}
       <div
         style={{
           position: "absolute",
@@ -144,7 +173,7 @@ export const HeroImage: React.FC = () => {
           boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
         }}
       >
-        <span style={{ fontSize: 13, color: TEXT_MID, fontWeight: 500 }}>Hold</span>
+        <span style={{ fontSize: 13, color: TEXT_MID, fontWeight: 500 }}>{copy.hold}</span>
         <div
           style={{
             minWidth: 44,
@@ -164,10 +193,9 @@ export const HeroImage: React.FC = () => {
         >
           ⌥
         </div>
-        <span style={{ fontSize: 13, color: TEXT_MID, fontWeight: 500 }}>to record</span>
+        <span style={{ fontSize: 13, color: TEXT_MID, fontWeight: 500 }}>{copy.record}</span>
       </div>
 
-      {/* Recording pill — matches real overlay */}
       <div
         style={{
           position: "absolute",
@@ -192,11 +220,10 @@ export const HeroImage: React.FC = () => {
             letterSpacing: 0.2,
           }}
         >
-          Listening
+          {copy.listening}
         </span>
       </div>
 
-      {/* Flow mark */}
       <div
         style={{
           position: "absolute",
