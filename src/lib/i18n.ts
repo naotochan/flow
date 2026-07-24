@@ -278,8 +278,8 @@ const translations = {
       appearanceDark: { ja: "ダーク", en: "Dark" },
       uiLanguage: { ja: "表示言語", en: "UI Language" },
       uiLanguageHint: {
-        ja: "設定画面とオーバーレイの言語です。",
-        en: "Language for Settings and the overlay.",
+        ja: "設定画面・オーバーレイ・メニューバーの言語です。",
+        en: "Language for Settings, the overlay, and the menu bar.",
       },
       doubleTapInterval: { ja: "ダブルタップ間隔", en: "Double-tap interval" },
       doubleTapHint: {
