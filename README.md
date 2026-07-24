@@ -4,6 +4,10 @@
 
 Formerly Whisper Dictation. A speech-to-text desktop app for macOS built with Tauri — talk, polish, paste at the cursor. Set up OpenAI, LM Studio, or faster-whisper-server to use your preferred STT engine.
 
+<p align="center">
+  <img src="docs/demo/usage.png" alt="Flow — hold a hotkey, speak, and paste into any app" width="900" />
+</p>
+
 ## Screenshots
 
 | Onboarding | General Settings | STT Engine |
