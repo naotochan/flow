@@ -5,18 +5,8 @@
 旧称 Whisper Dictation。Tauri で作った Mac 用の Speech-to-text デスクトップアプリです。OpenAI や LM Studio，faster-whisper-server からお好きな物をセットアップすることで，一般的な STT が使えます。
 
 <p align="center">
-  <img src="docs/demo/usage.png" alt="Flow — ホットキーを押して話し、どのアプリにもペースト" width="900" />
+  <img src="docs/demo/usage-ja.png" alt="Flow — ホットキーを押して話し、どのアプリにもペースト" width="900" />
 </p>
-
-## スクリーンショット
-
-| オンボーディング | 一般設定 | 音声認識 |
-|:---:|:---:|:---:|
-| ![Onboarding](assets/onboarding_1.png) | ![Settings](assets/setting_hotkey.png) | ![STT](assets/setting_stt_engine.png) |
-
-| 後処理 | テスト |
-|:---:|:---:|
-| ![LLM](assets/settting_postprocessing.png) | ![Test](assets/setting_test.png) |
 
 ## Features
 
