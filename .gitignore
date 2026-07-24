@@ -12,6 +12,9 @@ src-tauri/target/
 .claude/
 CLAUDE.md
 
+# Local task tracking (agent session notes)
+tasks/
+
 # IDE
 .vscode/
 .idea/
