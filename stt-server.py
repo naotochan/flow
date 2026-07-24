@@ -84,6 +84,14 @@ async def list_models():
 
 @app.get("/health")
 async def health():
+    # Import check catches broken system-Python orphans that still bind the port.
+    try:
+        import faster_whisper  # noqa: F401
+    except ImportError as e:
+        return JSONResponse(
+            {"status": "error", "error": str(e)},
+            status_code=503,
+        )
     return {"status": "ok"}
 
 

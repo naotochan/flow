@@ -335,28 +335,12 @@ async fn check_stt_server(state: tauri::State<'_, AppState>) -> Result<bool, Str
 
 #[tauri::command]
 async fn start_stt_server(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
-    // Already healthy — nothing to do (common during onboarding re-entry).
-    {
-        let settings = state.settings.lock().await;
-        let url = format!(
-            "http://{}:{}/health",
-            settings.local_stt_server.host, settings.local_stt_server.port
-        );
-        drop(settings);
-        let healthy = reqwest::Client::new()
-            .get(&url)
-            .timeout(std::time::Duration::from_secs(1))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false);
-        if healthy {
-            log::info!("STT server already healthy — skip start");
-            return Ok(());
-        }
-    }
+    ensure_stt_server(&state, &app).await
+}
 
-    // Check if already running
+/// Ensure the local Whisper STT server is up (correct venv). Safe to call repeatedly.
+async fn ensure_stt_server(state: &AppState, app: &tauri::AppHandle) -> Result<(), String> {
+    // Already tracked and running.
     {
         let mut proc = state.stt_server_process.lock().await;
         if let Some(ref mut child) = *proc {
@@ -372,6 +356,35 @@ async fn start_stt_server(state: tauri::State<'_, AppState>, app: tauri::AppHand
         }
     }
 
+    let (host, port) = {
+        let settings = state.settings.lock().await;
+        (
+            settings.local_stt_server.host.clone(),
+            settings.local_stt_server.port,
+        )
+    };
+    let url = format!("http://{}:{}/health", host, port);
+    let healthy = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(1))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+    if healthy {
+        // Port is serving a capable health check (faster_whisper import ok).
+        // May be an orphan from a previous session — leave it alone.
+        log::info!("STT server already healthy on {}:{} — skip start", host, port);
+        return Ok(());
+    }
+
+    // Not healthy: free the port (broken orphan / half-dead process) then spawn.
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("lsof -ti:{} | xargs kill -9 2>/dev/null", port))
+        .output();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
     let settings = state.settings.lock().await;
     let model = settings.local_stt_server.model.clone();
     let port = settings.local_stt_server.port;
@@ -379,7 +392,7 @@ async fn start_stt_server(state: tauri::State<'_, AppState>, app: tauri::AppHand
     let python_path = settings.local_stt_server.python_path.clone();
     drop(settings);
 
-    let script_path = find_script(&app, "stt-server.py")?;
+    let script_path = find_script(app, "stt-server.py")?;
     let python = find_python(&python_path, &script_path);
 
     log::info!(
@@ -420,7 +433,6 @@ async fn start_stt_server(state: tauri::State<'_, AppState>, app: tauri::AppHand
             ));
         }
         Ok(None) => {
-            // Still running — good
             log::info!("STT server process is running");
         }
         Err(e) => {
@@ -1101,13 +1113,37 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                         (s.local_stt_server.host.clone(), s.local_stt_server.port)
                     };
                     let url = format!("http://{}:{}/health", host, port);
-                    let server_ok = reqwest::Client::new()
+                    let client = reqwest::Client::new();
+                    let mut server_ok = client
                         .get(&url)
                         .timeout(std::time::Duration::from_secs(1))
                         .send()
                         .await
                         .map(|r| r.status().is_success())
                         .unwrap_or(false);
+
+                    if !server_ok {
+                        log::warn!("Local STT server not healthy — attempting auto-start");
+                        let state = handle.state::<AppState>();
+                        if let Err(e) = ensure_stt_server(&state, &handle).await {
+                            log::warn!("STT auto-start failed: {}", e);
+                        } else {
+                            // Model import / bind can take a moment
+                            for _ in 0..20 {
+                                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                server_ok = client
+                                    .get(&url)
+                                    .timeout(std::time::Duration::from_secs(1))
+                                    .send()
+                                    .await
+                                    .map(|r| r.status().is_success())
+                                    .unwrap_or(false);
+                                if server_ok {
+                                    break;
+                                }
+                            }
+                        }
+                    }
 
                     if abort_if_cancelled() {
                         recording_session.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1584,6 +1620,25 @@ pub fn run() {
                 register_hotkeys(app.handle(), &startup_hotkey, &startup_mode_hotkeys);
             } else {
                 log::info!("Onboarding not completed — deferring hotkey registration");
+            }
+
+            // Auto-start local Whisper STT so dictation works without opening Settings.
+            {
+                let preset = {
+                    let state = app.state::<AppState>();
+                    let s = tauri::async_runtime::block_on(state.settings.lock());
+                    s.stt.preset.clone()
+                };
+                if preset == "local_whisper" {
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = handle.state::<AppState>();
+                        match ensure_stt_server(&state, &handle).await {
+                            Ok(()) => log::info!("Local STT server ensured on launch"),
+                            Err(e) => log::warn!("Local STT auto-start on launch failed: {}", e),
+                        }
+                    });
+                }
             }
 
             Ok(())
