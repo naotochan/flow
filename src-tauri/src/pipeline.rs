@@ -98,6 +98,10 @@ const HALLUCINATION_EXACT: &[&str] = &[
     "Goodbye.",
     "you",
     "...",
+    // Whisper echoes the initial prompt back when fed silence or noise. These
+    // must stay in sync with the prompts in api/whisper.rs.
+    "音声入力による文章の書き取りです",
+    "This is a voice dictation transcription.",
 ];
 
 /// Marker phrases that are virtually never real dictation. Whisper emits these

@@ -34,7 +34,7 @@ async fn call_claude(
         config.base_url.trim_end_matches('/')
     );
 
-    let client = reqwest::Client::new();
+    let client = crate::api::http_client();
     let response = client
         .post(&url)
         .header("x-api-key", &config.api_key)
@@ -79,7 +79,7 @@ async fn call_openai_compatible(
         config.base_url.trim_end_matches('/')
     );
 
-    let client = reqwest::Client::new();
+    let client = crate::api::http_client();
     let mut request = client
         .post(&url)
         .header("content-type", "application/json")
