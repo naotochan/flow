@@ -233,7 +233,7 @@ pub async fn handle_recording_complete(
 
     // 5. Post-process with LLM mode (raw skips LLM)
     let mode = crate::config::resolve_active_mode(&settings);
-    let mut final_text = if mode.use_llm {
+    let mut final_text = if mode.runs_llm() {
         let lang_str = language.unwrap_or(&settings.language.primary);
         let prompt = crate::config::render_mode_prompt(&mode.system_prompt, lang_str);
         log::info!("LLM mode: {}", mode.id);

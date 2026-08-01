@@ -54,11 +54,14 @@ export type PostProcessModeId =
 
 export interface PostProcessMode {
   id: string;
+  /** User-typed label for custom modes; empty for builtins (localized in UI). */
+  name: string;
   use_llm: boolean;
   system_prompt: string;
   builtin: boolean;
 }
 
+/** Builtin ids only — custom modes are read from `settings.modes` at runtime. */
 export const POST_PROCESS_MODE_IDS: PostProcessModeId[] = [
   "raw",
   "format",
