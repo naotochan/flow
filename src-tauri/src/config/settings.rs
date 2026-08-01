@@ -323,7 +323,8 @@ const FILLER_EN: &[&str] = &["um", "uh", "uhm", "hm"];
 /// different matter — that belongs to the words before it, and only the tail
 /// gets eaten, so "終わりです。えーと、次は" keeps its 。
 const FILLER_TRAIL: &[char] = &[
-    'ー', '〜', '～', '、', '，', ',', '…', '。', '．', '.', '！', '!', '？', '?',
+    'ー', '〜', '～', '、', '，', ',', '…', '。', '．', '.', '！', '!', '？', '?', ':', ';', '：',
+    '；',
 ];
 
 /// Whether a filler starting right after `prev` is at a clause boundary.
@@ -379,15 +380,33 @@ pub fn strip_fillers(text: &str) -> String {
                 // are structure here, not spacing — modes act on them — so one
                 // only goes when the filler sat on a line of its own and the
                 // line break would otherwise be left as a blank line.
-                let after_newline = out.is_empty() || out.ends_with('\n');
+                // One line break at most: past that they are the user's own
+                // paragraph breaks, and modes act on those.
+                let mut spare_line_break = out.is_empty() || out.ends_with(['\n', '\r']);
                 while i < chars.len() {
                     let c = chars[i];
+                    let is_line_break = c == '\n' || c == '\r';
                     let is_tail = FILLER_TRAIL.contains(&c)
-                        || (c.is_whitespace() && (after_newline || (c != '\n' && c != '\r')));
+                        || (c.is_whitespace() && (!is_line_break || spare_line_break));
                     if !is_tail {
                         break;
                     }
+                    if c == '\n' {
+                        spare_line_break = false;
+                    }
                     i += 1;
+                }
+                // Nothing follows on this line, so the comma in front of the
+                // filler now separates nothing ("はい、えーと。"). It only goes
+                // where a filler was actually removed — a "、" the user dictated
+                // at the end of a line is theirs to keep.
+                if matches!(chars.get(i), None | Some('\n') | Some('\r')) {
+                    while out.ends_with(|c: char| {
+                        matches!(c, '、' | '，' | ',')
+                            || (c.is_whitespace() && c != '\n' && c != '\r')
+                    }) {
+                        out.pop();
+                    }
                 }
                 continue;
             }
@@ -396,24 +415,37 @@ pub fn strip_fillers(text: &str) -> String {
         i += 1;
     }
 
-    // Whitespace only at the head: a leading "." or "、" is the user's own
-    // (".env file"), and nothing here put it there. At the tail, a comma left
-    // hanging by a trailing filler is not the user's ("はい、えーと。").
-    out.trim_start()
-        .trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '、' | '，' | ','))
-        .to_string()
+    // A leading "." or "、" is the user's own (".env file") and nothing here
+    // put it there, so only whitespace goes.
+    out.trim().to_string()
 }
 
 /// Length in `char`s of the filler at `start`, or `None` if there is none.
 fn match_filler(chars: &[char], start: usize) -> Option<usize> {
     // Japanese: longest match, so a drawn out "ええーと" is one filler rather
     // than "えー" with a stray "と" left behind.
-    let ja = FILLER_JA
-        .iter()
-        .filter_map(|filler| match_collapsed(chars, start, filler))
-        .max();
-    if ja.is_some() {
-        return ja;
+    let mut longest = 0;
+    let mut cut_short = 0;
+    for filler in FILLER_JA {
+        let Some(len) = match_collapsed(chars, start, filler) else {
+            continue;
+        };
+        if filler_ends_here(filler, chars.get(start + len)) {
+            longest = longest.max(len);
+        } else {
+            cut_short = cut_short.max(len);
+        }
+    }
+    // A longer entry matched but does not end where it matched, so this is
+    // "えーと" + "ですね" and not "えー" + "とですね". Falling back to the
+    // shorter entry would put a "と" the speaker never said at the head of the
+    // text; leaving the stall in is the lesser evil, and in every mode but
+    // `raw` the filler instruction still gets it.
+    if cut_short > longest {
+        return None;
+    }
+    if longest > 0 {
+        return Some(longest);
     }
 
     // English: take the whole word, then collapse repeated letters so a drawn
@@ -452,18 +484,56 @@ fn match_filler(chars: &[char], start: usize) -> Option<usize> {
 /// Match `filler` at `start` treating any run of one character as a single
 /// character ("えーーーと" == "えーと"), returning how many `char`s of the
 /// input that consumed.
+///
+/// The entry's own runs are counted too, or one of them would swallow what the
+/// next expected character needs and "ええと" would fail to match itself.
 fn match_collapsed(chars: &[char], start: usize, filler: &str) -> Option<usize> {
+    let expected: Vec<char> = filler.chars().collect();
     let mut i = start;
-    for expected in filler.chars() {
-        if chars.get(i) != Some(&expected) {
+    let mut j = 0;
+
+    while j < expected.len() {
+        let c = expected[j];
+        let need = expected[j..].iter().take_while(|e| **e == c).count();
+        let have = chars[i..].iter().take_while(|e| **e == c).count();
+        if have < need {
             return None;
         }
-        i += 1;
-        while chars.get(i) == Some(&expected) {
-            i += 1;
-        }
+        i += have;
+        j += need;
     }
     Some(i - start)
+}
+
+/// Characters no Japanese word begins with, so seeing one at the head of what
+/// is left means a word — or a filler — was cut in half.
+const NEVER_STARTS_A_WORD: &[char] = &[
+    'ー', '〜', '～', 'ん', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'っ', 'ゃ', 'ゅ', 'ょ',
+];
+
+/// Whether a Japanese filler that matched really ends where it matched.
+///
+/// The entries overlap with real words in both directions, and matching one is
+/// not on its own proof that the speaker stalled there.
+fn filler_ends_here(filler: &str, next: Option<&char>) -> bool {
+    let Some(next) = next else {
+        return true;
+    };
+    // "あー" in "あーっと" leaves a "っ" nothing can start with: the match
+    // landed inside a drawn out filler, not at the end of one.
+    if NEVER_STARTS_A_WORD.contains(next) {
+        return false;
+    }
+    // An entry ending in one of those characters cannot itself be the head of
+    // a longer word, so it is done here — which is what keeps "あのーそうです
+    // ね" catchable without a comma to lean on.
+    if matches!(filler.chars().last(), Some(c) if NEVER_STARTS_A_WORD.contains(&c)) {
+        return true;
+    }
+    // The rest double as the start of real words — "そのう" of "そのうち",
+    // "えーと" of "えーとりあえず" — so more hiragana means the word simply
+    // continues and removing the entry would eat its head.
+    !('ぁ'..='ん').contains(next)
 }
 
 /// "ummm" → "um". Only ever used to look a word up in [`FILLER_EN`]; the text
@@ -840,6 +910,61 @@ mod tests {
         assert_eq!(strip_fillers("えーーーと、明日"), "明日");
         assert_eq!(strip_fillers("ええーっと、はい"), "はい");
         assert_eq!(strip_fillers("んーと、そうですね"), "そうですね");
+        // An entry whose own head repeats has to match itself first of all.
+        assert_eq!(strip_fillers("ええと、はい"), "はい");
+        assert_eq!(strip_fillers("えええと、はい"), "はい");
+    }
+
+    #[test]
+    fn every_japanese_entry_matches_itself() {
+        for filler in FILLER_JA {
+            assert_eq!(strip_fillers(&format!("{filler}、はい")), "はい", "{filler}");
+            assert_eq!(strip_fillers(filler), "", "{filler}");
+        }
+    }
+
+    #[test]
+    fn a_filler_that_heads_a_real_word_is_left_alone() {
+        // "そのう" is the start of "そのうち", not a stall on its own.
+        assert_eq!(strip_fillers("そのうち行きます"), "そのうち行きます");
+        assert_eq!(strip_fillers("そのうえで判断します"), "そのうえで判断します");
+        assert_eq!(strip_fillers("あのうさぎ可愛い"), "あのうさぎ可愛い");
+        assert_eq!(strip_fillers("あのうちに帰る"), "あのうちに帰る");
+        // A word starts here, so the filler really did end.
+        assert_eq!(strip_fillers("えーと明日の会議です"), "明日の会議です");
+        // No comma to lean on, and none needed.
+        assert_eq!(strip_fillers("あのーそうですね"), "そうですね");
+    }
+
+    #[test]
+    fn an_ambiguous_stall_is_left_whole_rather_than_halved() {
+        // "えーと" + "ですね" and "えー" + "とりあえず" look alike from here,
+        // and dropping the shorter entry would head the text with a "と" that
+        // was never said. Leaving the stall in is what the LLM instruction is
+        // for; cutting one in half is not recoverable.
+        assert_eq!(strip_fillers("えーとですね、始めます"), "えーとですね、始めます");
+        assert_eq!(strip_fillers("えーっとちょっと待って"), "えーっとちょっと待って");
+        assert_eq!(strip_fillers("えーとりあえず進めます"), "えーとりあえず進めます");
+        assert_eq!(strip_fillers("うーんとても良い"), "うーんとても良い");
+        assert_eq!(strip_fillers("えーとえーと、はい"), "えーとえーと、はい");
+        // Same for a match that landed inside a drawn out filler: taking "あー"
+        // out of "あーっと" would leave a "っ" no word can start with.
+        assert_eq!(strip_fillers("あーっと、はい"), "あーっと、はい");
+        assert_eq!(strip_fillers("あーん、痛い"), "あーん、痛い");
+    }
+
+    #[test]
+    fn stripping_is_idempotent() {
+        for text in [
+            "えーと、明日の会議です",
+            "メモ\nえーと\n\n本文",
+            "はい、えーと。",
+            "そのうち行きます",
+            "Um, I think so",
+        ] {
+            let once = strip_fillers(text);
+            assert_eq!(strip_fillers(&once), once, "{text}");
+        }
     }
 
     #[test]
@@ -855,6 +980,12 @@ mod tests {
         assert_eq!(strip_fillers("はい、えーと。"), "はい");
         assert_eq!(strip_fillers("そうですね、えーと"), "そうですね");
         assert_eq!(strip_fillers("I think so, um."), "I think so");
+        // The end of a line is the end of a clause just as much.
+        assert_eq!(strip_fillers("明日は、えーと\n晴れです"), "明日は\n晴れです");
+        assert_eq!(strip_fillers("a, um\nb"), "a\nb");
+        // Nothing was removed here, so the comma is the user's own.
+        assert_eq!(strip_fillers("これは、"), "これは、");
+        assert_eq!(strip_fillers("りんご、みかん、\nそれと"), "りんご、みかん、\nそれと");
     }
 
     #[test]
@@ -873,8 +1004,24 @@ mod tests {
         // The line the filler sat on goes with it, rather than becoming blank.
         assert_eq!(strip_fillers("メモ\nえーと\n本文"), "メモ\n本文");
         assert_eq!(strip_fillers("えーと\n明日は晴れです"), "明日は晴れです");
-        // A filler mid-line must not pull the following line up.
-        assert_eq!(strip_fillers("明日は、えーと\n晴れです"), "明日は、\n晴れです");
+        // A filler mid-line must not pull the following line up, and must not
+        // leave the space it sat behind at the end of the line either.
+        assert_eq!(strip_fillers("明日は晴れ えーと\n次の話"), "明日は晴れ\n次の話");
+        assert_eq!(
+            strip_fillers("明日は晴れ\u{3000}えーと\n次の話"),
+            "明日は晴れ\n次の話"
+        );
+        assert_eq!(strip_fillers("一行目\nえーと、二行目"), "一行目\n二行目");
+        assert_eq!(strip_fillers("明日は、えーと\r\n晴れです"), "明日は\r\n晴れです");
+        // The blank line is the user's paragraph break, not the filler's.
+        assert_eq!(strip_fillers("メモ\nえーと\n\n本文"), "メモ\n\n本文");
+    }
+
+    #[test]
+    fn a_colon_behind_a_filler_goes_with_it() {
+        // Every other separator is swallowed; these must not be left standing.
+        assert_eq!(strip_fillers("Um: yes"), "yes");
+        assert_eq!(strip_fillers("a; um; b"), "a; b");
     }
 
     #[test]
