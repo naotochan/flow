@@ -272,16 +272,19 @@ pub fn normalize_modes(settings: &mut AppSettings) {
 pub fn render_mode_prompt(template: &str, language: &str, remove_fillers: bool) -> String {
     let rendered = template.replace("{language}", language);
     if remove_fillers {
-        format!("{rendered}\n{FILLER_INSTRUCTION}")
+        // Own paragraph: every preset ends on a "Return ONLY ..." line, and an
+        // instruction glued to that reads as part of it.
+        format!("{rendered}\n\n{FILLER_INSTRUCTION}")
     } else {
         rendered
     }
 }
 
-const FILLER_INSTRUCTION: &str = "Additionally: delete filler words, hesitation sounds and false starts (\"えー\", \"あのー\", \"えーと\", \"um\", \"uh\", \"hmm\"). Keep the wording of the actual content unchanged.";
+const FILLER_INSTRUCTION: &str = "Additionally: delete filler words, hesitation sounds and false starts (\"えー\", \"あのー\", \"えーと\", \"um\", \"uh\", \"hmm\"). Keep the wording of the actual content unchanged, and never touch what is inside a code token, identifier, path or URL.";
 
-/// Hesitation sounds dropped at a clause boundary. Longest first: a prefix like
-/// "えー" would otherwise consume the head of "えーと" and leave "と" behind.
+/// Hesitation sounds dropped at a clause boundary. Matched with repeated
+/// characters collapsed, so "えー" covers the drawn out "えーーー" too, and the
+/// longest match wins so "ええーと" cannot be read as "えー" + "と".
 ///
 /// Deliberately excluded: "まあ", "なんか", "その" and bare "あの", which carry
 /// meaning at least as often as they stall ("あの人", "なんか食べたい"). LLM
@@ -289,10 +292,8 @@ const FILLER_INSTRUCTION: &str = "Additionally: delete filler words, hesitation 
 const FILLER_JA: &[&str] = &[
     "えーっと",
     "えーと",
-    "ええっと",
     "ええと",
     "えっと",
-    "ええー",
     "えー",
     "あのー",
     "あのう",
@@ -300,6 +301,7 @@ const FILLER_JA: &[&str] = &[
     "あぁ",
     "うーんと",
     "うーん",
+    "んーと",
     "んー",
     "そのー",
     "そのう",
@@ -328,6 +330,9 @@ const FILLER_TRAIL: &[char] = &[
 ///
 /// Fillers are stalls at the head of a phrase, and requiring that position is
 /// what keeps "へえー" and "いえーい" intact — their "えー" sits mid-word.
+///
+/// Opening brackets are not boundaries: "(um)" is a written aside, and removing
+/// the word from inside it would leave the brackets behind, empty.
 fn is_clause_boundary(prev: Option<char>) -> bool {
     match prev {
         None => true,
@@ -347,13 +352,9 @@ fn is_clause_boundary(prev: Option<char>) -> bool {
                         | ':'
                         | ';'
                         | '…'
-                        | '「'
                         | '」'
-                        | '『'
                         | '』'
-                        | '（'
                         | '）'
-                        | '('
                         | ')'
                 )
         }
@@ -374,11 +375,18 @@ pub fn strip_fillers(text: &str) -> String {
         if is_clause_boundary(out.chars().last()) {
             if let Some(len) = match_filler(&chars, i) {
                 i += len;
-                // Swallow the filler's own tail ("えーと、", "um,") but never a
-                // sentence end, which belongs to the words before it.
-                while i < chars.len()
-                    && (FILLER_TRAIL.contains(&chars[i]) || chars[i].is_whitespace())
-                {
+                // Swallow the filler's own tail ("えーと、", "um,"). Newlines
+                // are structure here, not spacing — modes act on them — so one
+                // only goes when the filler sat on a line of its own and the
+                // line break would otherwise be left as a blank line.
+                let after_newline = out.is_empty() || out.ends_with('\n');
+                while i < chars.len() {
+                    let c = chars[i];
+                    let is_tail = FILLER_TRAIL.contains(&c)
+                        || (c.is_whitespace() && (after_newline || (c != '\n' && c != '\r')));
+                    if !is_tail {
+                        break;
+                    }
                     i += 1;
                 }
                 continue;
@@ -388,24 +396,26 @@ pub fn strip_fillers(text: &str) -> String {
         i += 1;
     }
 
-    // A filler removed from the head can leave the separator that followed the
-    // one before it ("えー、えーと、はい" → "、はい").
-    out.trim_start_matches(|c: char| c.is_whitespace() || FILLER_TRAIL.contains(&c))
-        .trim_end()
+    // Whitespace only at the head: a leading "." or "、" is the user's own
+    // (".env file"), and nothing here put it there. At the tail, a comma left
+    // hanging by a trailing filler is not the user's ("はい、えーと。").
+    out.trim_start()
+        .trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '、' | '，' | ','))
         .to_string()
 }
 
 /// Length in `char`s of the filler at `start`, or `None` if there is none.
 fn match_filler(chars: &[char], start: usize) -> Option<usize> {
-    for filler in FILLER_JA {
-        let len = filler.chars().count();
-        if start + len > chars.len() {
-            continue;
-        }
-        if chars[start..start + len].iter().copied().eq(filler.chars()) {
-            return Some(len);
-        }
+    // Japanese: longest match, so a drawn out "ええーと" is one filler rather
+    // than "えー" with a stray "と" left behind.
+    let ja = FILLER_JA
+        .iter()
+        .filter_map(|filler| match_collapsed(chars, start, filler))
+        .max();
+    if ja.is_some() {
+        return ja;
     }
+
     // English: take the whole word, then collapse repeated letters so a drawn
     // out "Ummm" reads as "um". Comparing whole words is also what keeps
     // "umbrella" and "her" intact.
@@ -413,16 +423,47 @@ fn match_filler(chars: &[char], start: usize) -> Option<usize> {
         .iter()
         .take_while(|c| c.is_ascii_alphabetic())
         .count();
-    if word_len > 0 {
-        let word: String = chars[start..start + word_len]
+    if word_len == 0 {
+        return None;
+    }
+    // Glued to a digit or a hyphen it is part of something else ("UH-60"), and
+    // in all caps it is far more likely an acronym than a drawn out "um".
+    if matches!(chars.get(start + word_len), Some(c) if c.is_ascii_digit() || *c == '-' || *c == '_' || *c == '\'')
+    {
+        return None;
+    }
+    if word_len > 1
+        && chars[start..start + word_len]
             .iter()
-            .flat_map(|c| c.to_lowercase())
-            .collect();
-        if FILLER_EN.contains(&collapse_repeats(&word).as_str()) {
-            return Some(word_len);
-        }
+            .all(|c| c.is_ascii_uppercase())
+    {
+        return None;
+    }
+    let word: String = chars[start..start + word_len]
+        .iter()
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    if FILLER_EN.contains(&collapse_repeats(&word).as_str()) {
+        return Some(word_len);
     }
     None
+}
+
+/// Match `filler` at `start` treating any run of one character as a single
+/// character ("えーーーと" == "えーと"), returning how many `char`s of the
+/// input that consumed.
+fn match_collapsed(chars: &[char], start: usize, filler: &str) -> Option<usize> {
+    let mut i = start;
+    for expected in filler.chars() {
+        if chars.get(i) != Some(&expected) {
+            return None;
+        }
+        i += 1;
+        while chars.get(i) == Some(&expected) {
+            i += 1;
+        }
+    }
+    Some(i - start)
 }
 
 /// "ummm" → "um". Only ever used to look a word up in [`FILLER_EN`]; the text
@@ -790,6 +831,50 @@ mod tests {
         assert_eq!(strip_fillers("Uhh, right"), "right");
         // Code mode dictates this one for real.
         assert_eq!(strip_fillers("Err(e) means failure"), "Err(e) means failure");
+    }
+
+    #[test]
+    fn drawn_out_fillers_leave_nothing_behind() {
+        // A shorter entry matching the head would leave "と、明日".
+        assert_eq!(strip_fillers("ええーと、明日"), "明日");
+        assert_eq!(strip_fillers("えーーーと、明日"), "明日");
+        assert_eq!(strip_fillers("ええーっと、はい"), "はい");
+        assert_eq!(strip_fillers("んーと、そうですね"), "そうですね");
+    }
+
+    #[test]
+    fn leading_punctuation_is_the_users_own() {
+        // Nothing was removed here, so nothing may be trimmed either.
+        assert_eq!(strip_fillers(".env file"), ".env file");
+        assert_eq!(strip_fillers("…そして次は"), "…そして次は");
+        assert_eq!(strip_fillers("、そうですね"), "、そうですね");
+    }
+
+    #[test]
+    fn trailing_filler_leaves_no_dangling_comma() {
+        assert_eq!(strip_fillers("はい、えーと。"), "はい");
+        assert_eq!(strip_fillers("そうですね、えーと"), "そうですね");
+        assert_eq!(strip_fillers("I think so, um."), "I think so");
+    }
+
+    #[test]
+    fn acronyms_and_hyphenated_words_are_not_fillers() {
+        assert_eq!(
+            strip_fillers("This is a UH-60 helicopter"),
+            "This is a UH-60 helicopter"
+        );
+        assert_eq!(strip_fillers("The UM system is fine"), "The UM system is fine");
+        // Removing the word would leave the brackets standing empty.
+        assert_eq!(strip_fillers("(um) yes"), "(um) yes");
+    }
+
+    #[test]
+    fn newlines_are_structure_not_spacing() {
+        // The line the filler sat on goes with it, rather than becoming blank.
+        assert_eq!(strip_fillers("メモ\nえーと\n本文"), "メモ\n本文");
+        assert_eq!(strip_fillers("えーと\n明日は晴れです"), "明日は晴れです");
+        // A filler mid-line must not pull the following line up.
+        assert_eq!(strip_fillers("明日は、えーと\n晴れです"), "明日は、\n晴れです");
     }
 
     #[test]

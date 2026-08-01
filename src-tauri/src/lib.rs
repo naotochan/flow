@@ -299,6 +299,15 @@ async fn test_microphone_stt(state: tauri::State<'_, AppState>) -> Result<SttTes
         raw_text.clone()
     };
 
+    if stripped.trim().is_empty() {
+        // Nothing but fillers — the live pipeline drops this recording, so
+        // there is nothing to hand the LLM here either.
+        return Ok(SttTestResult {
+            raw_text,
+            processed_text: Some(String::new()),
+        });
+    }
+
     let mode = config::resolve_active_mode(&settings);
     let mut processed_text = if mode.runs_llm() {
         let lang_str = language.unwrap_or(&settings.language.primary);

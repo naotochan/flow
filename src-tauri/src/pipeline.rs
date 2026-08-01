@@ -349,17 +349,20 @@ pub async fn handle_recording_complete(
 
     // Strip fillers before the emptiness check below, which then doubles as the
     // guard for an utterance that was nothing but "えーと".
-    let raw_text = if settings.remove_fillers {
+    //
+    // Kept beside `raw_text` rather than replacing it: this edits the user's own
+    // words, and the history entry is the only place left to see what went.
+    let stripped = if settings.remove_fillers {
         let stripped = crate::config::strip_fillers(&raw_text);
         if stripped != raw_text {
             log::info!("Fillers removed: '{}'", stripped);
         }
         stripped
     } else {
-        raw_text
+        raw_text.clone()
     };
 
-    if raw_text.trim().is_empty() {
+    if stripped.trim().is_empty() {
         restore_clipboard_backup(app_handle);
         hide_overlay(app_handle);
         let _ = app_handle.emit(
@@ -381,15 +384,15 @@ pub async fn handle_recording_complete(
             settings.remove_fillers,
         );
         log::info!("LLM mode: {}", mode.id);
-        match claude::post_process(&raw_text, &settings.llm, &prompt).await {
+        match claude::post_process(&stripped, &settings.llm, &prompt).await {
             Ok(processed) => processed,
             Err(e) => {
                 log::warn!("LLM post-processing failed: {}, using raw text", e);
-                raw_text.clone()
+                stripped.clone()
             }
         }
     } else {
-        raw_text.clone()
+        stripped.clone()
     };
 
     // 5b. Apply replacement dictionary / snippets (after LLM so paste/history match UI).
