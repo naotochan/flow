@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegram/nicetauri/refs/heads/main/crates/tauri-cli/schema.json",
   "productName": "Flow",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "identifier": "com.flow.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -53,7 +53,7 @@
     },
     "macOS": {
       "infoPlist": "../Info.plist",
-      "bundleVersion": "319",
+      "bundleVersion": "320",
       "signingIdentity": "Apple Development: naoto.k70@gmail.com (S27SCJ956H)",
       "entitlements": "Entitlements.plist"
     },
