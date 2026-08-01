@@ -117,6 +117,9 @@ pub struct AppState {
     /// Last known combined Accessibility + Input Monitoring state, as seen by
     /// the background poller. `None` until the first check after startup.
     pub last_hotkey_permission_ok: Arc<std::sync::Mutex<Option<bool>>>,
+    /// Guards against starting `monitor_hotkey_permissions` twice (it can be
+    /// kicked off from both `setup()` and the `initialize_hotkeys` command).
+    pub permission_monitor_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[tauri::command]
@@ -739,10 +742,21 @@ fn notify_permission_change(recovered: bool, ui_language: &str) {
         body.replace('\\', "\\\\").replace('"', "\\\""),
         title.replace('\\', "\\\\").replace('"', "\\\"")
     );
-    let _ = std::process::Command::new("osascript")
+    match std::process::Command::new("osascript")
         .arg("-e")
         .arg(script)
-        .spawn();
+        .spawn()
+    {
+        // Reap on a plain OS thread (not the async runtime) so the process
+        // doesn't linger as a zombie; this fires rarely (permission state
+        // transitions only), so a blocking `wait()` here is fine.
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(e) => log::warn!("Failed to spawn osascript notification: {}", e),
+    }
 }
 
 /// Periodically re-check Accessibility/Input Monitoring permission (the two
@@ -797,7 +811,29 @@ async fn monitor_hotkey_permissions(app: tauri::AppHandle) {
                         settings.mode_hotkeys.clone(),
                     )
                 };
-                reload_hotkeys(&app, &hotkey_key, activation_mode, double_tap_ms, &mode_hotkeys);
+                // hotkey::rshift's CGEventTap install/uninstall touches
+                // unsynchronized `static mut` state and adds run-loop sources
+                // via Core Foundation APIs that assume the main thread (it's
+                // normally only ever called from the main-thread `setup()`
+                // closure or a tauri command handler dispatched to it).
+                // This poller runs on a background tokio worker, so the
+                // reload must be marshaled onto the main thread — calling
+                // reload_hotkeys directly here would race with any other
+                // hotkey reload path (e.g. a settings save) touching the
+                // same static state concurrently.
+                let handle = app.clone();
+                let hotkey_key_mt = hotkey_key.clone();
+                let mode_hotkeys_mt = mode_hotkeys.clone();
+                let activation_mode_mt = activation_mode.clone();
+                let _ = app.run_on_main_thread(move || {
+                    reload_hotkeys(
+                        &handle,
+                        &hotkey_key_mt,
+                        activation_mode_mt,
+                        double_tap_ms,
+                        &mode_hotkeys_mt,
+                    );
+                });
                 notify_permission_change(true, &ui_language);
             }
             Some(true) | None if !ok => {
@@ -811,6 +847,25 @@ async fn monitor_hotkey_permissions(app: tauri::AppHandle) {
             _ => {}
         }
     }
+}
+
+/// Start `monitor_hotkey_permissions` at most once per app lifetime.
+///
+/// Hotkeys are registered from two places: `setup()` (onboarding already
+/// completed at launch) and the `initialize_hotkeys` command (onboarding
+/// finishes mid-session). The poller needs to run in both cases, so both
+/// call this — the flag makes the second call a no-op instead of running
+/// two pollers that would double up notifications and reload attempts.
+fn start_permission_monitor_once(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    if state
+        .permission_monitor_started
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        return;
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn(monitor_hotkey_permissions(handle));
 }
 
 /// Unregister all hotkeys (CGEventTap + global shortcuts).
@@ -1027,6 +1082,12 @@ async fn initialize_hotkeys(app: tauri::AppHandle) -> Result<(), String> {
     } else {
         register_hotkeys(&app, &hotkey_key, &mode_hotkeys);
     }
+
+    // Onboarding may complete (and hotkeys first get initialized) well after
+    // setup() ran, in which case that startup branch never started the
+    // permission poller — start it here too (no-op if already running).
+    start_permission_monitor_once(&app);
+
     Ok(())
 }
 
@@ -1637,6 +1698,7 @@ pub fn run() {
         mode_shortcuts: Arc::new(std::sync::Mutex::new(Vec::new())),
         paste_undoable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         last_hotkey_permission_ok: Arc::new(std::sync::Mutex::new(None)),
+        permission_monitor_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     tauri::Builder::default()
@@ -1743,8 +1805,7 @@ pub fn run() {
                 // Watch for Accessibility/Input Monitoring permission being
                 // revoked or (re-)granted after startup, and recover without
                 // requiring a manual app restart. See monitor_hotkey_permissions.
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(monitor_hotkey_permissions(handle));
+                start_permission_monitor_once(app.handle());
             } else {
                 log::info!("Onboarding not completed — deferring hotkey registration");
             }
