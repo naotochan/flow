@@ -373,6 +373,19 @@ const translations = {
           en: "Light cleanup for code and identifiers",
         },
       },
+      addMode: { ja: "モードを追加", en: "Add mode" },
+      newModeName: { ja: "新しいモード", en: "New mode" },
+      customModeName: { ja: "モード名", en: "Mode name" },
+      customModeNamePlaceholder: { ja: "例: 議事録", en: "e.g. Meeting notes" },
+      customModeDesc: {
+        ja: "自分で追加したモードです。下のシステムプロンプトで動作を決めます。",
+        en: "Your own mode. The system prompt below defines what it does.",
+      },
+      deleteMode: { ja: "削除", en: "Delete" },
+      deleteModeConfirm: {
+        ja: (name: string) => `「${name}」を削除しますか？`,
+        en: (name: string) => `Delete "${name}"?`,
+      },
       prompt: { ja: "システムプロンプト", en: "System prompt" },
       promptHint: {
         ja: "{language} は認識言語ヒントに置換されます",

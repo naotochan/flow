@@ -233,7 +233,9 @@ pub async fn handle_recording_complete(
 
     // 5. Post-process with LLM mode (raw skips LLM)
     let mode = crate::config::resolve_active_mode(&settings);
-    let mut final_text = if mode.use_llm {
+    // An empty prompt would hand the LLM the dictation with no instructions,
+    // so a mode whose prompt has been cleared falls back to raw output.
+    let mut final_text = if mode.use_llm && !mode.system_prompt.trim().is_empty() {
         let lang_str = language.unwrap_or(&settings.language.primary);
         let prompt = crate::config::render_mode_prompt(&mode.system_prompt, lang_str);
         log::info!("LLM mode: {}", mode.id);

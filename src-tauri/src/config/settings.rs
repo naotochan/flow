@@ -49,6 +49,10 @@ pub struct AppSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostProcessMode {
     pub id: String,
+    /// User-visible label for custom modes. Left empty for builtins, whose
+    /// labels are localized in the UI and tray instead.
+    #[serde(default)]
+    pub name: String,
     /// When false, skip LLM and keep STT (+ dictionary) only.
     pub use_llm: bool,
     /// System prompt template. Use `{language}` for the STT language hint.
@@ -67,30 +71,35 @@ pub fn default_modes() -> Vec<PostProcessMode> {
     vec![
         PostProcessMode {
             id: "raw".into(),
+            name: String::new(),
             use_llm: false,
             system_prompt: String::new(),
             builtin: true,
         },
         PostProcessMode {
             id: "format".into(),
+            name: String::new(),
             use_llm: true,
             system_prompt: FORMAT_PROMPT.into(),
             builtin: true,
         },
         PostProcessMode {
             id: "email".into(),
+            name: String::new(),
             use_llm: true,
             system_prompt: EMAIL_PROMPT.into(),
             builtin: true,
         },
         PostProcessMode {
             id: "translate".into(),
+            name: String::new(),
             use_llm: true,
             system_prompt: TRANSLATE_PROMPT.into(),
             builtin: true,
         },
         PostProcessMode {
             id: "code".into(),
+            name: String::new(),
             use_llm: true,
             system_prompt: CODE_PROMPT.into(),
             builtin: true,
@@ -150,7 +159,8 @@ pub fn resolve_active_mode(settings: &AppSettings) -> PostProcessMode {
         })
 }
 
-/// Ensure builtin modes exist and sync `llm.enabled` with raw vs LLM modes.
+/// Ensure builtin modes exist, custom modes are well-formed, and `llm.enabled`
+/// stays in sync with raw vs LLM modes.
 pub fn normalize_modes(settings: &mut AppSettings) {
     if settings.modes.is_empty() {
         settings.modes = default_modes();
@@ -161,17 +171,61 @@ pub fn normalize_modes(settings: &mut AppSettings) {
             settings.active_mode_id = default_active_mode_id();
         }
     } else {
-        // Merge any missing builtin ids (forward-compat when we add modes).
-        let defaults = default_modes();
-        for def in defaults {
-            if !settings.modes.iter().any(|m| m.id == def.id) {
-                settings.modes.push(def);
+        let stored = std::mem::take(&mut settings.modes);
+
+        // Builtins first in their canonical order, so adding a builtin later
+        // doesn't strand it after the user's custom modes in the tray.
+        let mut ordered: Vec<PostProcessMode> = default_modes()
+            .into_iter()
+            .map(|def| {
+                match stored.iter().find(|m| m.id == def.id) {
+                    // The prompt is the only field the UI lets you edit on a
+                    // builtin; everything else stays ours, so a hand-edited
+                    // settings file can't turn a builtin into a deletable mode.
+                    Some(saved) => PostProcessMode {
+                        system_prompt: saved.system_prompt.clone(),
+                        ..def
+                    },
+                    None => def,
+                }
+            })
+            .collect();
+
+        for mode in stored {
+            if ordered.iter().any(|m| m.id == mode.id) {
+                continue; // builtin (already merged above) or duplicate id
             }
+            if mode.id.trim().is_empty() {
+                continue;
+            }
+            let name = if mode.name.trim().is_empty() {
+                mode.id.clone()
+            } else {
+                mode.name.clone()
+            };
+            ordered.push(PostProcessMode {
+                name,
+                builtin: false,
+                ..mode
+            });
         }
+
+        settings.modes = ordered;
     }
-    if settings.active_mode_id.is_empty() {
+
+    // A deleted custom mode must not leave the app pointing at a mode that is
+    // no longer there, nor keep its global shortcut registered.
+    if settings.active_mode_id.is_empty()
+        || !settings
+            .modes
+            .iter()
+            .any(|m| m.id == settings.active_mode_id)
+    {
         settings.active_mode_id = default_active_mode_id();
     }
+    let known_ids: Vec<String> = settings.modes.iter().map(|m| m.id.clone()).collect();
+    settings.mode_hotkeys.retain(|id, _| known_ids.contains(id));
+
     let use_llm = resolve_active_mode(settings).use_llm;
     settings.llm.enabled = use_llm;
 }
@@ -484,5 +538,79 @@ mod tests {
             render_mode_prompt("Lang: {language}", "ja"),
             "Lang: ja"
         );
+    }
+
+    fn custom(id: &str, name: &str) -> PostProcessMode {
+        PostProcessMode {
+            id: id.into(),
+            name: name.into(),
+            use_llm: true,
+            system_prompt: "do a thing".into(),
+            builtin: false,
+        }
+    }
+
+    #[test]
+    fn normalize_keeps_custom_modes_after_builtins() {
+        let mut s = AppSettings::default();
+        s.modes = vec![custom("custom-1", "議事録")];
+        s.active_mode_id = "custom-1".into();
+        normalize_modes(&mut s);
+
+        let ids: Vec<&str> = s.modes.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["raw", "format", "email", "translate", "code", "custom-1"]
+        );
+        assert_eq!(s.active_mode_id, "custom-1");
+        assert_eq!(resolve_active_mode(&s).system_prompt, "do a thing");
+    }
+
+    #[test]
+    fn normalize_restores_builtin_flag_but_keeps_edited_prompt() {
+        let mut s = AppSettings::default();
+        s.modes = vec![PostProcessMode {
+            id: "format".into(),
+            name: "renamed".into(),
+            use_llm: false,
+            system_prompt: "my own prompt".into(),
+            builtin: false,
+        }];
+        normalize_modes(&mut s);
+
+        let format = s.modes.iter().find(|m| m.id == "format").unwrap();
+        assert!(format.builtin, "a builtin must not become deletable");
+        assert!(format.use_llm, "builtin flags come from the definition");
+        assert!(format.name.is_empty(), "builtins stay localized in the UI");
+        assert_eq!(format.system_prompt, "my own prompt");
+    }
+
+    #[test]
+    fn normalize_recovers_from_a_deleted_active_mode() {
+        let mut s = AppSettings::default();
+        s.modes = vec![custom("custom-1", "議事録")];
+        s.active_mode_id = "custom-gone".into();
+        s.mode_hotkeys.insert("custom-gone".into(), "ctrl+1".into());
+        s.mode_hotkeys.insert("custom-1".into(), "ctrl+2".into());
+        normalize_modes(&mut s);
+
+        assert_eq!(s.active_mode_id, "format");
+        assert!(!s.mode_hotkeys.contains_key("custom-gone"));
+        assert_eq!(s.mode_hotkeys.get("custom-1").map(String::as_str), Some("ctrl+2"));
+    }
+
+    #[test]
+    fn normalize_labels_and_dedupes_custom_modes() {
+        let mut s = AppSettings::default();
+        s.modes = vec![
+            custom("custom-1", ""),
+            custom("custom-1", "duplicate"),
+            custom("  ", "no id"),
+        ];
+        normalize_modes(&mut s);
+
+        let customs: Vec<&PostProcessMode> = s.modes.iter().filter(|m| !m.builtin).collect();
+        assert_eq!(customs.len(), 1);
+        assert_eq!(customs[0].name, "custom-1", "unnamed falls back to the id");
     }
 }

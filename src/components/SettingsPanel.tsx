@@ -1033,11 +1033,12 @@ function PostProcessingSection({
     settings.llm.preset === "ollama" ||
     settings.llm.preset === "lm_studio" ||
     /localhost|127\.0\.0\.1/.test(settings.llm.base_url);
-  const modeId = (settings.active_mode_id || "format") as PostProcessModeId;
-  const modes = settings.modes?.length
+  const modeId = settings.active_mode_id || "format";
+  const modes: PostProcessMode[] = settings.modes?.length
     ? settings.modes
     : POST_PROCESS_MODE_IDS.map((id) => ({
         id,
+        name: "",
         use_llm: id !== "raw",
         system_prompt: "",
         builtin: true,
@@ -1045,25 +1046,32 @@ function PostProcessingSection({
   const activeMode = modes.find((m) => m.id === modeId) ?? modes[0];
   const useLlm = activeMode?.use_llm ?? modeId !== "raw";
 
-  const setMode = (id: PostProcessModeId) => {
+  // Builtins are localized; custom modes carry the name the user typed.
+  const labelOf = (mode: PostProcessMode) =>
+    mode.builtin
+      ? t(PP.modes[mode.id as PostProcessModeId], lang)
+      : mode.name.trim() || t(PP.newModeName, lang);
+
+  const setMode = (id: string) => {
+    const target = modes.find((m) => m.id === id);
     update({
       active_mode_id: id,
       modes,
-      llm: { ...settings.llm, enabled: id !== "raw" },
+      llm: { ...settings.llm, enabled: target?.use_llm ?? id !== "raw" },
     });
   };
 
-  const updateModePrompt = (prompt: string) => {
+  const updateActiveMode = (patch: Partial<PostProcessMode>) => {
     const next: PostProcessMode[] = modes.map((m) =>
-      m.id === modeId ? { ...m, system_prompt: prompt } : m,
+      m.id === modeId ? { ...m, ...patch } : m,
     );
     update({ modes: next });
   };
 
   const modeHotkeys = settings.mode_hotkeys ?? {};
-  const [capturingModeId, setCapturingModeId] = useState<PostProcessModeId | null>(null);
+  const [capturingModeId, setCapturingModeId] = useState<string | null>(null);
 
-  const setModeHotkey = (id: PostProcessModeId, key: string | null) => {
+  const setModeHotkey = (id: string, key: string | null) => {
     const next = { ...modeHotkeys };
     if (!key) {
       delete next[id];
@@ -1071,6 +1079,40 @@ function PostProcessingSection({
       next[id] = key;
     }
     update({ mode_hotkeys: next });
+  };
+
+  const addCustomMode = () => {
+    // Timestamp-based so a custom id can never collide with a builtin one.
+    const id = `custom-${Date.now().toString(36)}`;
+    const created: PostProcessMode = {
+      id,
+      name: t(PP.newModeName, lang),
+      use_llm: true,
+      // Seeded from Format so a new mode works the moment it is created —
+      // an empty system prompt would send the LLM the dictation with no
+      // instructions at all. The user edits it from here.
+      system_prompt: modes.find((m) => m.id === "format")?.system_prompt ?? "",
+      builtin: false,
+    };
+    update({
+      active_mode_id: id,
+      modes: [...modes, created],
+      llm: { ...settings.llm, enabled: true },
+    });
+  };
+
+  const deleteActiveMode = () => {
+    if (activeMode?.builtin) return;
+    const remaining = modes.filter((m) => m.id !== modeId);
+    const nextHotkeys = { ...modeHotkeys };
+    delete nextHotkeys[modeId];
+    const fallback = remaining.find((m) => m.id === "format") ?? remaining[0];
+    update({
+      modes: remaining,
+      active_mode_id: fallback?.id ?? "format",
+      mode_hotkeys: nextHotkeys,
+      llm: { ...settings.llm, enabled: fallback?.use_llm ?? true },
+    });
   };
 
   return (
@@ -1083,45 +1125,84 @@ function PostProcessingSection({
           role="radiogroup"
           aria-label={t(PP.mode, lang)}
         >
-          {POST_PROCESS_MODE_IDS.map((id) => {
-            const selected = modeId === id;
+          {modes.map((mode) => {
+            const selected = modeId === mode.id;
             return (
               <button
-                key={id}
+                key={mode.id}
                 type="button"
                 role="radio"
                 aria-checked={selected}
-                onClick={() => setMode(id)}
-                className={`px-2.5 py-2 rounded-lg text-sm whitespace-nowrap transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
+                onClick={() => setMode(mode.id)}
+                title={labelOf(mode)}
+                className={`px-2.5 py-2 rounded-lg text-sm truncate transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
                   selected
                     ? "bg-[var(--accent-soft)] text-[var(--accent-text)] font-medium"
                     : "bg-[var(--bg-muted)] text-[var(--text-muted)] hover:text-[var(--text)]"
                 }`}
               >
-                {t(PP.modes[id], lang)}
+                {labelOf(mode)}
               </button>
             );
           })}
+          <button
+            type="button"
+            onClick={addCustomMode}
+            className="px-2.5 py-2 rounded-lg text-sm whitespace-nowrap border border-dashed border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:border-[var(--text-faint)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+          >
+            + {t(PP.addMode, lang)}
+          </button>
         </div>
         <p className="text-[11px] text-[var(--text-faint)] leading-relaxed">
-          {t(PP.modeDesc[modeId], lang)}
+          {activeMode?.builtin
+            ? t(PP.modeDesc[modeId as PostProcessModeId], lang)
+            : t(PP.customModeDesc, lang)}
         </p>
+
+        {activeMode && !activeMode.builtin && (
+          <div className="flex items-end gap-2 pt-1">
+            <div className="flex-1 space-y-1.5">
+              <FieldLabel htmlFor="custom-mode-name">
+                {t(PP.customModeName, lang)}
+              </FieldLabel>
+              <input
+                id="custom-mode-name"
+                type="text"
+                className={inputClass}
+                value={activeMode.name}
+                placeholder={t(PP.customModeNamePlaceholder, lang)}
+                onChange={(e) => updateActiveMode({ name: e.target.value })}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm(t(PP.deleteModeConfirm, lang)(labelOf(activeMode)))) {
+                  deleteActiveMode();
+                }
+              }}
+              className="px-3 py-2 rounded-lg text-sm text-[var(--danger)] hover:bg-[var(--danger-soft)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+            >
+              {t(PP.deleteMode, lang)}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="space-y-2">
         <FieldLabel>{t(PP.modeHotkeys, lang)}</FieldLabel>
         <FieldHint>{t(PP.modeHotkeysHint, lang)}</FieldHint>
         <ul className="space-y-1.5">
-          {POST_PROCESS_MODE_IDS.map((id) => (
+          {modes.map((mode) => (
             <ModeHotkeyRow
-              key={id}
-              label={t(PP.modes[id], lang)}
-              value={modeHotkeys[id] || ""}
+              key={mode.id}
+              label={labelOf(mode)}
+              value={modeHotkeys[mode.id] || ""}
               recordHotkey={settings.hotkey.key}
               lang={lang}
-              capturing={capturingModeId === id}
-              onCapturingChange={(next) => setCapturingModeId(next ? id : null)}
-              onChange={(key) => setModeHotkey(id, key)}
+              capturing={capturingModeId === mode.id}
+              onCapturingChange={(next) => setCapturingModeId(next ? mode.id : null)}
+              onChange={(key) => setModeHotkey(mode.id, key)}
             />
           ))}
         </ul>
@@ -1138,7 +1219,7 @@ function PostProcessingSection({
               <textarea
                 className={`${monoInputClass} min-h-[140px] resize-y leading-relaxed`}
                 value={activeMode?.system_prompt ?? ""}
-                onChange={(e) => updateModePrompt(e.target.value)}
+                onChange={(e) => updateActiveMode({ system_prompt: e.target.value })}
                 spellCheck={false}
               />
             </div>

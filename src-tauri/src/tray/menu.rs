@@ -11,8 +11,6 @@ use crate::AppState;
 const TRAY_RECENT_COUNT: usize = 8;
 const TRAY_LABEL_MAX: usize = 40;
 
-const MODE_ORDER: &[&str] = &["raw", "format", "email", "translate", "code"];
-
 struct TrayStrings {
     settings: &'static str,
     history: &'static str,
@@ -44,8 +42,17 @@ fn tray_strings(ui_language: &str) -> TrayStrings {
     }
 }
 
-fn mode_label(ui_language: &str, mode_id: &str) -> String {
-    let label = match (ui_language == "en", mode_id) {
+/// Builtins are localized here; custom modes carry their own user-typed name.
+fn mode_label(ui_language: &str, mode: &config::PostProcessMode) -> String {
+    if !mode.builtin {
+        let name = mode.name.trim();
+        return if name.is_empty() {
+            mode.id.clone()
+        } else {
+            name.to_string()
+        };
+    }
+    let label = match (ui_language == "en", mode.id.as_str()) {
         (true, "raw") => "Raw",
         (true, "format") => "Format",
         (true, "email") => "Email",
@@ -56,7 +63,7 @@ fn mode_label(ui_language: &str, mode_id: &str) -> String {
         (false, "email") => "メール",
         (false, "translate") => "翻訳",
         (false, "code") => "コード",
-        _ => mode_id,
+        _ => mode.id.as_str(),
     };
     label.to_string()
 }
@@ -76,12 +83,24 @@ fn truncate_label(text: &str, empty_label: &str) -> String {
 
 /// Rebuild tray menu from current settings + history. Safe to call after each recognition.
 pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let (active_mode, history_enabled, retention_days, paste_undoable, ui_language) = app
+    // (id, label) pairs rather than ids: custom modes have no static label, so
+    // the name has to be read while we still hold the settings lock.
+    let (active_mode, modes, history_enabled, retention_days, paste_undoable, ui_language) = app
         .try_state::<AppState>()
         .and_then(|state| {
             state.settings.try_lock().ok().map(|s| {
+                let source = if s.modes.is_empty() {
+                    config::default_modes()
+                } else {
+                    s.modes.clone()
+                };
+                let modes: Vec<(String, String)> = source
+                    .iter()
+                    .map(|m| (m.id.clone(), mode_label(&s.ui_language, m)))
+                    .collect();
                 (
                     s.active_mode_id.clone(),
+                    modes,
                     s.history_enabled,
                     s.history_retention_days,
                     state
@@ -92,8 +111,13 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
             })
         })
         .unwrap_or_else(|| {
+            let modes = config::default_modes()
+                .iter()
+                .map(|m| (m.id.clone(), mode_label("ja", m)))
+                .collect();
             (
                 "format".to_string(),
+                modes,
                 true,
                 0,
                 false,
@@ -111,10 +135,10 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
     let history_show_all =
         MenuItemBuilder::with_id("history-show-all", t.history_show_all).build(app)?;
 
-    let mode_items: Vec<CheckMenuItem<tauri::Wry>> = MODE_ORDER
+    let mode_items: Vec<CheckMenuItem<tauri::Wry>> = modes
         .iter()
-        .map(|id| {
-            CheckMenuItemBuilder::with_id(format!("mode:{id}"), mode_label(&ui_language, id))
+        .map(|(id, label)| {
+            CheckMenuItemBuilder::with_id(format!("mode:{id}"), label)
                 .checked(active_mode == *id)
                 .build(app)
         })
