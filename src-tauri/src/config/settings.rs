@@ -48,6 +48,11 @@ pub struct AppSettings {
     /// `0` disables the check.
     #[serde(default = "default_min_recording_ms")]
     pub min_recording_ms: u32,
+    /// Strip hesitation sounds ("えーと", "um") from the transcript, and ask
+    /// the LLM to do the same in modes that run one. Off by default: it edits
+    /// the user's words, so it has to be opted into.
+    #[serde(default)]
+    pub remove_fillers: bool,
 }
 
 /// Long enough to drop a stray key brush, short enough to keep "了解です".
@@ -259,9 +264,177 @@ pub fn normalize_modes(settings: &mut AppSettings) {
     settings.llm.enabled = use_llm;
 }
 
-/// Render `{language}` in a mode prompt template.
-pub fn render_mode_prompt(template: &str, language: &str) -> String {
-    template.replace("{language}", language)
+/// Render `{language}` in a mode prompt template, appending the filler-removal
+/// instruction when the user asked for it.
+///
+/// Appended rather than baked into each preset so it also reaches custom modes
+/// the user wrote themselves.
+pub fn render_mode_prompt(template: &str, language: &str, remove_fillers: bool) -> String {
+    let rendered = template.replace("{language}", language);
+    if remove_fillers {
+        format!("{rendered}\n{FILLER_INSTRUCTION}")
+    } else {
+        rendered
+    }
+}
+
+const FILLER_INSTRUCTION: &str = "Additionally: delete filler words, hesitation sounds and false starts (\"えー\", \"あのー\", \"えーと\", \"um\", \"uh\", \"hmm\"). Keep the wording of the actual content unchanged.";
+
+/// Hesitation sounds dropped at a clause boundary. Longest first: a prefix like
+/// "えー" would otherwise consume the head of "えーと" and leave "と" behind.
+///
+/// Deliberately excluded: "まあ", "なんか", "その" and bare "あの", which carry
+/// meaning at least as often as they stall ("あの人", "なんか食べたい"). LLM
+/// modes still catch those from context — this list only has to be safe.
+const FILLER_JA: &[&str] = &[
+    "えーっと",
+    "えーと",
+    "ええっと",
+    "ええと",
+    "えっと",
+    "ええー",
+    "えー",
+    "あのー",
+    "あのう",
+    "あー",
+    "あぁ",
+    "うーんと",
+    "うーん",
+    "んー",
+    "そのー",
+    "そのう",
+];
+
+/// Matched case-insensitively against a whole word whose repeated letters have
+/// been collapsed, so one entry covers "Um", "umm" and "Ummm" alike — and
+/// "under" keeps its "u", because the word there is "under".
+///
+/// "er"/"erm" are left out: they would take "Err" with them, which is real
+/// dictation in code mode.
+const FILLER_EN: &[&str] = &["um", "uh", "uhm", "hm"];
+
+/// Trailing characters swallowed along with a filler, so "えーと、明日" does
+/// not become "、明日".
+///
+/// Sentence punctuation is in here too: a stop *behind* a filler ends the
+/// filler and nothing else ("Hmm. Let me check"). One in front of it is a
+/// different matter — that belongs to the words before it, and only the tail
+/// gets eaten, so "終わりです。えーと、次は" keeps its 。
+const FILLER_TRAIL: &[char] = &[
+    'ー', '〜', '～', '、', '，', ',', '…', '。', '．', '.', '！', '!', '？', '?',
+];
+
+/// Whether a filler starting right after `prev` is at a clause boundary.
+///
+/// Fillers are stalls at the head of a phrase, and requiring that position is
+/// what keeps "へえー" and "いえーい" intact — their "えー" sits mid-word.
+fn is_clause_boundary(prev: Option<char>) -> bool {
+    match prev {
+        None => true,
+        Some(c) => {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '、' | '。'
+                        | '，'
+                        | '．'
+                        | '！'
+                        | '？'
+                        | '!'
+                        | '?'
+                        | ','
+                        | '.'
+                        | ':'
+                        | ';'
+                        | '…'
+                        | '「'
+                        | '」'
+                        | '『'
+                        | '』'
+                        | '（'
+                        | '）'
+                        | '('
+                        | ')'
+                )
+        }
+    }
+}
+
+/// Remove hesitation sounds from a transcript.
+///
+/// Runs before the LLM (and instead of it, in `raw` mode) so the text is clean
+/// even when no model is in the loop. Conservative by design: it only fires at
+/// a clause boundary, so anything it misses is left for the LLM instruction.
+pub fn strip_fillers(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < chars.len() {
+        if is_clause_boundary(out.chars().last()) {
+            if let Some(len) = match_filler(&chars, i) {
+                i += len;
+                // Swallow the filler's own tail ("えーと、", "um,") but never a
+                // sentence end, which belongs to the words before it.
+                while i < chars.len()
+                    && (FILLER_TRAIL.contains(&chars[i]) || chars[i].is_whitespace())
+                {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+
+    // A filler removed from the head can leave the separator that followed the
+    // one before it ("えー、えーと、はい" → "、はい").
+    out.trim_start_matches(|c: char| c.is_whitespace() || FILLER_TRAIL.contains(&c))
+        .trim_end()
+        .to_string()
+}
+
+/// Length in `char`s of the filler at `start`, or `None` if there is none.
+fn match_filler(chars: &[char], start: usize) -> Option<usize> {
+    for filler in FILLER_JA {
+        let len = filler.chars().count();
+        if start + len > chars.len() {
+            continue;
+        }
+        if chars[start..start + len].iter().copied().eq(filler.chars()) {
+            return Some(len);
+        }
+    }
+    // English: take the whole word, then collapse repeated letters so a drawn
+    // out "Ummm" reads as "um". Comparing whole words is also what keeps
+    // "umbrella" and "her" intact.
+    let word_len = chars[start..]
+        .iter()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .count();
+    if word_len > 0 {
+        let word: String = chars[start..start + word_len]
+            .iter()
+            .flat_map(|c| c.to_lowercase())
+            .collect();
+        if FILLER_EN.contains(&collapse_repeats(&word).as_str()) {
+            return Some(word_len);
+        }
+    }
+    None
+}
+
+/// "ummm" → "um". Only ever used to look a word up in [`FILLER_EN`]; the text
+/// itself is never rewritten this way.
+fn collapse_repeats(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    for c in word.chars() {
+        if !out.ends_with(c) {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// One dictionary entry: replace all occurrences of `from` with `to`.
@@ -455,6 +628,7 @@ impl Default for AppSettings {
             modes: default_modes(),
             history_enabled: true,
             min_recording_ms: default_min_recording_ms(),
+            remove_fillers: false,
             history_retention_days: 0,
             mode_hotkeys: std::collections::HashMap::new(),
         }
@@ -565,9 +739,78 @@ mod tests {
     #[test]
     fn render_prompt_substitutes_language() {
         assert_eq!(
-            render_mode_prompt("Lang: {language}", "ja"),
+            render_mode_prompt("Lang: {language}", "ja", false),
             "Lang: ja"
         );
+    }
+
+    #[test]
+    fn render_prompt_appends_filler_instruction_only_when_enabled() {
+        assert!(!render_mode_prompt("Base", "ja", false).contains("filler"));
+        let with = render_mode_prompt("Base", "ja", true);
+        assert!(with.starts_with("Base"));
+        assert!(with.contains("filler"));
+    }
+
+    #[test]
+    fn strips_japanese_fillers_at_clause_boundaries() {
+        assert_eq!(strip_fillers("えーと、明日の会議です"), "明日の会議です");
+        assert_eq!(
+            strip_fillers("これは、あのー、テストです"),
+            "これは、テストです"
+        );
+        assert_eq!(strip_fillers("うーん そうですね"), "そうですね");
+        // Consecutive stalls collapse in one pass.
+        assert_eq!(strip_fillers("えー、あのー、はい"), "はい");
+    }
+
+    #[test]
+    fn keeps_words_that_merely_contain_a_filler() {
+        // The "えー" here is mid-word, not a stall.
+        assert_eq!(strip_fillers("へえー、すごい"), "へえー、すごい");
+        assert_eq!(strip_fillers("いえーい"), "いえーい");
+        // Excluded from the list precisely because they carry meaning.
+        assert_eq!(strip_fillers("あの人に伝えて"), "あの人に伝えて");
+        assert_eq!(strip_fillers("まあ、いいか"), "まあ、いいか");
+        assert_eq!(strip_fillers("なんか食べたい"), "なんか食べたい");
+    }
+
+    #[test]
+    fn strips_english_fillers_as_whole_words_only() {
+        assert_eq!(strip_fillers("Um, I think so"), "I think so");
+        assert_eq!(strip_fillers("I uh need a break"), "I need a break");
+        assert_eq!(strip_fillers("Hmm. Let me check"), "Let me check");
+        // Substrings of real words stay put.
+        assert_eq!(
+            strip_fillers("Her umbrella is under it"),
+            "Her umbrella is under it"
+        );
+        // Drawn out fillers collapse to the same entry.
+        assert_eq!(strip_fillers("Ummm... okay"), "okay");
+        assert_eq!(strip_fillers("Uhh, right"), "right");
+        // Code mode dictates this one for real.
+        assert_eq!(strip_fillers("Err(e) means failure"), "Err(e) means failure");
+    }
+
+    #[test]
+    fn sentence_punctuation_survives_a_neighbouring_filler() {
+        // The 。belongs to "終わりです", not to the filler after it.
+        assert_eq!(
+            strip_fillers("終わりです。えーと、次は"),
+            "終わりです。次は"
+        );
+    }
+
+    #[test]
+    fn all_filler_utterance_becomes_empty() {
+        assert_eq!(strip_fillers("えーと、あのー"), "");
+        assert_eq!(strip_fillers("um, uh"), "");
+    }
+
+    #[test]
+    fn text_without_fillers_is_untouched() {
+        let text = "本日はお集まりいただきありがとうございます。";
+        assert_eq!(strip_fillers(text), text);
     }
 
     fn custom(id: &str, name: &str) -> PostProcessMode {

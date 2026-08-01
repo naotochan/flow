@@ -271,6 +271,14 @@ const translations = {
         ja: "録音前に選択テキストをコピーし、結果で上書きします。未選択時はカーソル位置へ挿入。",
         en: "Copies the selection before recording and pastes over it. With no selection, inserts at the cursor.",
       },
+      removeFillers: {
+        ja: "フィラーを削除",
+        en: "Remove filler words",
+      },
+      removeFillersHint: {
+        ja: "「えーと」「あのー」「um」などの言いよどみを取り除きます。文節の先頭にあるものだけが対象なので「へえー」などは残ります。LLMを使うモードではプロンプトでも指示します。",
+        en: "Drops hesitation sounds like \"えーと\", \"あのー\" and \"um\". Only at the start of a phrase, so words that merely contain one are kept. LLM modes are also told to do the same.",
+      },
       launchAtLogin: {
         ja: "ログイン時に自動起動",
         en: "Launch at login",

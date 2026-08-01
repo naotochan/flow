@@ -290,24 +290,36 @@ async fn test_microphone_stt(state: tauri::State<'_, AppState>) -> Result<SttTes
         });
     }
 
-    // 4. LLM post-processing (active mode)
+    // 4. Filler removal, then LLM post-processing (active mode) — same order as
+    //    the live pipeline, so the test can't take a different path than the
+    //    real thing. `raw_text` stays untouched: it is shown as the STT result.
+    let stripped = if settings.remove_fillers {
+        config::strip_fillers(&raw_text)
+    } else {
+        raw_text.clone()
+    };
+
     let mode = config::resolve_active_mode(&settings);
     let mut processed_text = if mode.runs_llm() {
         let lang_str = language.unwrap_or(&settings.language.primary);
-        let prompt = config::render_mode_prompt(&mode.system_prompt, lang_str);
-        match api::claude::post_process(&raw_text, &settings.llm, &prompt).await {
+        let prompt =
+            config::render_mode_prompt(&mode.system_prompt, lang_str, settings.remove_fillers);
+        match api::claude::post_process(&stripped, &settings.llm, &prompt).await {
             Ok(processed) => Some(processed),
             Err(e) => {
                 log::warn!("LLM post-processing failed in test: {}", e);
                 Some(format!("(LLM error: {})", e))
             }
         }
+    } else if stripped != raw_text {
+        // Raw mode still has something to show once fillers are gone.
+        Some(stripped.clone())
     } else {
         None
     };
 
     // 5. Apply replacement dictionary (same order as live pipeline).
-    let after_llm = processed_text.as_deref().unwrap_or(&raw_text);
+    let after_llm = processed_text.as_deref().unwrap_or(&stripped);
     let replaced = config::apply_replacements(after_llm, &settings.replacements);
     if replaced != after_llm {
         processed_text = Some(replaced);

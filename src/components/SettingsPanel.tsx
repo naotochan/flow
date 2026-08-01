@@ -431,6 +431,21 @@ function GeneralSection({
       <label className="flex items-start gap-3 text-sm text-[var(--text)] cursor-pointer">
         <input
           type="checkbox"
+          checked={settings.remove_fillers ?? false}
+          onChange={(e) => update({ remove_fillers: e.target.checked })}
+          className="accent-[var(--accent)] w-4 h-4 mt-0.5"
+        />
+        <span>
+          <span className="font-medium">{t(G.removeFillers, lang)}</span>
+          <span className="block text-[11px] text-[var(--text-faint)] mt-0.5">
+            {t(G.removeFillersHint, lang)}
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-3 text-sm text-[var(--text)] cursor-pointer">
+        <input
+          type="checkbox"
           checked={autoLaunch}
           onChange={(e) => toggleAutoLaunch(e.target.checked)}
           className="accent-[var(--accent)] w-4 h-4 mt-0.5"

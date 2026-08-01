@@ -15,6 +15,7 @@ function normalizeSettings(s: AppSettings): AppSettings {
     history_retention_days: s.history_retention_days ?? 0,
     mode_hotkeys: s.mode_hotkeys ?? {},
     min_recording_ms: s.min_recording_ms ?? 500,
+    remove_fillers: s.remove_fillers ?? false,
   };
 }
 

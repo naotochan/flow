@@ -347,6 +347,18 @@ pub async fn handle_recording_complete(
         return Ok(());
     }
 
+    // Strip fillers before the emptiness check below, which then doubles as the
+    // guard for an utterance that was nothing but "えーと".
+    let raw_text = if settings.remove_fillers {
+        let stripped = crate::config::strip_fillers(&raw_text);
+        if stripped != raw_text {
+            log::info!("Fillers removed: '{}'", stripped);
+        }
+        stripped
+    } else {
+        raw_text
+    };
+
     if raw_text.trim().is_empty() {
         restore_clipboard_backup(app_handle);
         hide_overlay(app_handle);
@@ -363,7 +375,11 @@ pub async fn handle_recording_complete(
     let mode = crate::config::resolve_active_mode(&settings);
     let mut final_text = if mode.runs_llm() {
         let lang_str = language.unwrap_or(&settings.language.primary);
-        let prompt = crate::config::render_mode_prompt(&mode.system_prompt, lang_str);
+        let prompt = crate::config::render_mode_prompt(
+            &mode.system_prompt,
+            lang_str,
+            settings.remove_fillers,
+        );
         log::info!("LLM mode: {}", mode.id);
         match claude::post_process(&raw_text, &settings.llm, &prompt).await {
             Ok(processed) => processed,
