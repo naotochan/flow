@@ -297,6 +297,12 @@ const translations = {
         ja: "2回押しの間隔です。短いほど素早い操作が必要です。",
         en: "Time window between two presses. Shorter = faster taps required.",
       },
+      minRecording: { ja: "最小録音時間", en: "Minimum recording length" },
+      minRecordingHint: {
+        ja: "これより短い録音は音声認識せずに破棄します。ホットキーの誤爆による幻覚を防げます。0 で無効。",
+        en: "Recordings shorter than this are discarded without transcribing. Prevents hallucinations from an accidental hotkey press. 0 disables it.",
+      },
+      minRecordingOff: { ja: "無効", en: "Off" },
     },
     transcription: {
       provider: { ja: "プロバイダー", en: "Provider" },

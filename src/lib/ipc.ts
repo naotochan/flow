@@ -97,6 +97,8 @@ export interface AppSettings {
   history_retention_days: number;
   /** Optional mode → hotkey map (e.g. `{ email: "ctrl+1" }`) */
   mode_hotkeys: Record<string, string>;
+  /** @default 500 — discard recordings shorter than this; 0 disables */
+  min_recording_ms: number;
 }
 
 export const getSettings = () => invoke<AppSettings>("get_settings");

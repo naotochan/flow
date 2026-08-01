@@ -108,49 +108,120 @@ const HALLUCINATION_EXACT: &[&str] = &[
 /// (often with extra words prepended/appended) when fed silence or noise, e.g.
 /// "字幕をご覧いただきまして、ご視聴ありがとうございました。". We filter the
 /// result if it CONTAINS any of these anywhere, to catch such variants.
+///
+/// Prefer the shortest fragment that is still unambiguous. Whisper conjugates
+/// these endlessly — 視聴ありがとうございました / 視聴してくださって
+/// ありがとうございました / 視聴いただきありがとうございます — so matching on a
+/// full sentence only catches the one variant we happened to write down.
 const HALLUCINATION_CONTAINS: &[&str] = &[
-    "ご視聴ありがとうございました",
-    "ご視聴ありがとうございます",
-    "ご清聴ありがとうございました",
-    "ご清聴ありがとうございます",
+    // Video sign-offs, by far the most common source.
+    "視聴ありがとう",
+    "清聴ありがとう",
+    "視聴してくださって",
+    "視聴してくださり",
+    "視聴いただき",
+    "最後まで視聴",
     "最後までご視聴",
+    "最後までご覧",
+    "ご覧いただきありがとう",
+    "ご覧くださりありがとう",
+    "ご覧くださってありがとう",
+    "次回もお楽しみに",
     "チャンネル登録",
     "高評価とチャンネル",
+    "高評価をお願い",
+    // Subtitle credits.
     "字幕をご覧",
     "字幕作成",
+    "字幕提供",
     "thank you for watching",
     "thanks for watching",
     "please subscribe",
+    "subtitles by",
+    "amara.org",
+    // Sentences seen in the wild that carry none of the markers above. These
+    // are whole hallucinated utterances rather than a recognizable family, so
+    // they can only be listed one by one — new sightings go here.
+    "子供のお話を聞いてみると",
 ];
 
+/// Lowercase, strip all whitespace, drop trailing sentence punctuation.
+///
+/// Whitespace has to go: Whisper's spacing inside a hallucination is arbitrary
+/// ("最後まで視聴してくださって ありがとうございました"), so a marker written
+/// without the space would otherwise miss.
+fn normalize_for_match(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .trim_end_matches(&['.', '!', '?', '。', '！', '？'][..])
+        .to_lowercase()
+}
+
+/// Non-speech annotations Whisper writes for music, applause and the like:
+/// "(音楽)", "［拍手］", "【BGM】", "♪～♪".
+fn is_non_speech_annotation(normalized: &str) -> bool {
+    const BRACKETS: &[(char, char)] = &[
+        ('(', ')'),
+        ('（', '）'),
+        ('[', ']'),
+        ('［', '］'),
+        ('【', '】'),
+        ('〔', '〕'),
+        ('<', '>'),
+    ];
+    let (Some(first), Some(last)) = (normalized.chars().next(), normalized.chars().last()) else {
+        return false;
+    };
+    if normalized.chars().count() >= 2
+        && BRACKETS
+            .iter()
+            .any(|(open, close)| first == *open && last == *close)
+    {
+        return true;
+    }
+    // Music/filler symbols with nothing else in the utterance.
+    !normalized.is_empty()
+        && normalized
+            .chars()
+            .all(|c| matches!(c, '♪' | '♬' | '♫' | '〜' | '～' | '~' | '-' | '−' | 'ー' | '.' | '。'))
+}
+
+/// Wall-clock length of the capture. `audio_samples` is interleaved, so the
+/// frame count is the sample count divided by the channel count.
+fn recording_duration_ms(sample_count: usize, sample_rate: u32, channels: u16) -> u64 {
+    let frames_per_second = sample_rate as u64 * channels.max(1) as u64;
+    if frames_per_second == 0 {
+        return 0;
+    }
+    sample_count as u64 * 1000 / frames_per_second
+}
+
 fn is_hallucination(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    let normalized = normalize_for_match(text);
+    if normalized.is_empty() {
         return true;
     }
 
-    // Normalize: drop trailing punctuation/whitespace and lowercase
-    // (lowercasing only affects ASCII; Japanese is unchanged).
-    let normalized = trimmed
-        .trim_end_matches(&['.', '!', '?', '。', '！', '？', ' ', '　'][..])
-        .to_lowercase();
-
     // 1. Whole-utterance exact match for ambiguous short phrases.
-    let exact_hit = HALLUCINATION_EXACT.iter().any(|phrase| {
-        let p = phrase
-            .trim_end_matches(&['.', '!', '?', '。', '！', '？'][..])
-            .to_lowercase();
-        normalized == p
-    });
-    if exact_hit {
+    if HALLUCINATION_EXACT
+        .iter()
+        .any(|phrase| normalized == normalize_for_match(phrase))
+    {
         return true;
     }
 
     // 2. Substring match for unambiguous "viewing/subtitle" markers, which
     //    catches prefixed/suffixed hallucination variants.
-    HALLUCINATION_CONTAINS
+    if HALLUCINATION_CONTAINS
         .iter()
-        .any(|marker| normalized.contains(&marker.to_lowercase()))
+        .any(|marker| normalized.contains(&normalize_for_match(marker)))
+    {
+        return true;
+    }
+
+    // 3. Bracketed sound annotations, which are never dictated text.
+    is_non_speech_annotation(&normalized)
 }
 
 pub async fn handle_recording_complete(
@@ -165,7 +236,27 @@ pub async fn handle_recording_complete(
         return Ok(());
     }
 
-    // 0. Silence detection — skip STT if audio is too quiet
+    // 0a. Too-short recording — an accidental hotkey brush captures a fraction
+    // of a second of room noise, which is exactly what Whisper hallucinates on.
+    let duration_ms = recording_duration_ms(audio_samples.len(), sample_rate, channels);
+    if settings.min_recording_ms > 0 && duration_ms < settings.min_recording_ms as u64 {
+        log::info!(
+            "Recording too short ({}ms < {}ms), skipping STT",
+            duration_ms,
+            settings.min_recording_ms
+        );
+        restore_clipboard_backup(app_handle);
+        hide_overlay(app_handle);
+        let _ = app_handle.emit(
+            "recording-state",
+            RecordingStateEvent {
+                state: "idle".to_string(),
+            },
+        );
+        return Ok(());
+    }
+
+    // 0b. Silence detection — skip STT if audio is too quiet
     let rms = (audio_samples.iter().map(|s| s * s).sum::<f32>() / audio_samples.len() as f32).sqrt();
     if rms < SILENCE_RMS_THRESHOLD {
         log::info!("Audio too quiet (RMS={:.5}), skipping STT", rms);
@@ -345,4 +436,72 @@ pub async fn handle_recording_complete(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_hallucination, recording_duration_ms};
+
+    #[test]
+    fn duration_accounts_for_interleaved_channels() {
+        // 48kHz stereo: 96000 samples is one second of audio, not two.
+        assert_eq!(recording_duration_ms(96_000, 48_000, 2), 1000);
+        assert_eq!(recording_duration_ms(48_000, 48_000, 1), 1000);
+        assert_eq!(recording_duration_ms(12_000, 48_000, 2), 125);
+        // A malformed config must not divide by zero.
+        assert_eq!(recording_duration_ms(1_000, 0, 2), 0);
+    }
+
+    #[test]
+    fn filters_video_signoff_variants() {
+        // Every one of these was missed by matching on full sentences.
+        for text in [
+            "ご視聴ありがとうございました。",
+            "最後まで視聴してくださって ありがとうございました。",
+            "最後までご視聴いただきありがとうございます",
+            "本日もご覧いただきありがとうございました！",
+            "チャンネル登録と高評価をお願いします",
+            "字幕をご覧いただきまして、ご視聴ありがとうございました。",
+            "Thanks for watching!",
+            "Subtitles by the Amara.org community",
+            "子供のお話を聞いてみると 子供にとっての気持ちがいいです",
+        ] {
+            assert!(is_hallucination(text), "should be filtered: {text}");
+        }
+    }
+
+    #[test]
+    fn filters_non_speech_annotations() {
+        for text in ["(音楽)", "［拍手］", "【BGM】", "♪～♪", "...", "  "] {
+            assert!(is_hallucination(text), "should be filtered: {text}");
+        }
+    }
+
+    #[test]
+    fn filters_echoed_prompt_and_bare_pleasantries() {
+        for text in [
+            "音声入力による文章の書き取りです。",
+            "ありがとうございました",
+            "Thank you.",
+        ] {
+            assert!(is_hallucination(text), "should be filtered: {text}");
+        }
+    }
+
+    #[test]
+    fn keeps_real_dictation() {
+        // The filter eating real speech is worse than letting one through, so
+        // these guard the substring markers against over-reaching.
+        for text in [
+            "今日はいい天気ですね。少し散歩に行こうと思います。",
+            "明日の会議の資料をまとめておいてもらえますか。",
+            "先ほどの件、ありがとうございました。助かりました。",
+            "字幕の位置を少し下げたいので調整をお願いします",
+            "この動画の音量を上げてください",
+            "Please review the pull request when you get a chance.",
+            "ご覧のとおり、テストはすべて通っています",
+        ] {
+            assert!(!is_hallucination(text), "should be kept: {text}");
+        }
+    }
 }

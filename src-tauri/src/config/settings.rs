@@ -43,6 +43,16 @@ pub struct AppSettings {
     /// Chord / function keys only (no standalone modifiers — those need EventTap).
     #[serde(default)]
     pub mode_hotkeys: std::collections::HashMap<String, String>,
+    /// Discard recordings shorter than this before they ever reach STT. Guards
+    /// against an accidental hotkey brush, which is prime hallucination fuel.
+    /// `0` disables the check.
+    #[serde(default = "default_min_recording_ms")]
+    pub min_recording_ms: u32,
+}
+
+/// Long enough to drop a stray key brush, short enough to keep "了解です".
+fn default_min_recording_ms() -> u32 {
+    500
 }
 
 /// One LLM post-processing mode (prompt preset).
@@ -438,6 +448,7 @@ impl Default for AppSettings {
             active_mode_id: default_active_mode_id(),
             modes: default_modes(),
             history_enabled: true,
+            min_recording_ms: default_min_recording_ms(),
             history_retention_days: 0,
             mode_hotkeys: std::collections::HashMap::new(),
         }
