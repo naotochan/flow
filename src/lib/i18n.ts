@@ -147,6 +147,17 @@ const translations = {
     saving: { ja: "保存中…", en: "Saving…" },
     setupGuide: { ja: "セットアップ画面を開く", en: "Open Setup" },
     loading: { ja: "読み込み中…", en: "Loading…" },
+    permissionBanner: {
+      title: {
+        ja: "ホットキーが反応していない可能性があります",
+        en: "The hotkey may not be responding",
+      },
+      description: {
+        ja: "アクセシビリティ／入力監視の権限が確認できません。許可されるまでホットキーは反応しません。",
+        en: "Accessibility / Input Monitoring permission isn't granted. The hotkey won't respond until it is.",
+      },
+      openSettings: { ja: "システム設定を開く", en: "Open System Settings" },
+    },
     nav: {
       general: { ja: "一般", en: "General" },
       transcription: { ja: "音声認識", en: "Transcription" },

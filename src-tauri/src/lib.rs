@@ -114,6 +114,9 @@ pub struct AppState {
     pub mode_shortcuts: Arc<std::sync::Mutex<Vec<(Shortcut, String)>>>,
     /// True after a Flow paste until undo (or overwritten by the next paste).
     pub paste_undoable: Arc<std::sync::atomic::AtomicBool>,
+    /// Last known combined Accessibility + Input Monitoring state, as seen by
+    /// the background poller. `None` until the first check after startup.
+    pub last_hotkey_permission_ok: Arc<std::sync::Mutex<Option<bool>>>,
 }
 
 #[tauri::command]
@@ -688,6 +691,128 @@ fn check_input_monitoring() -> bool {
     unsafe { CGPreflightListenEventAccess() }
 }
 
+/// Check Accessibility trust (AXIsProcessTrusted). Does not trigger a permission dialog.
+fn check_accessibility_trusted() -> bool {
+    unsafe {
+        extern "C" {
+            fn AXIsProcessTrusted() -> bool;
+        }
+        AXIsProcessTrusted()
+    }
+}
+
+/// The two permissions the hotkey CGEventTap depends on. Both are required
+/// for hotkeys to actually fire — Accessibility for the tap itself, Input
+/// Monitoring for receiving HID keyboard events (macOS 10.15+).
+fn read_hotkey_permission_flags() -> (bool, bool) {
+    (check_accessibility_trusted(), check_input_monitoring())
+}
+
+#[derive(Clone, serde::Serialize)]
+struct HotkeyPermissionEvent {
+    accessibility: bool,
+    input_monitoring: bool,
+    ok: bool,
+}
+
+/// Post a native macOS notification (no extra plugin dependency needed).
+fn notify_permission_change(recovered: bool, ui_language: &str) {
+    let (title, body) = if recovered {
+        if ui_language == "en" {
+            ("Flow", "Permissions restored — hotkey re-registered.")
+        } else {
+            ("Flow", "権限が復旧しました。ホットキーを再登録しました。")
+        }
+    } else if ui_language == "en" {
+        (
+            "Flow",
+            "Accessibility / Input Monitoring permission is missing. The hotkey won't work until it's granted in System Settings.",
+        )
+    } else {
+        (
+            "Flow",
+            "アクセシビリティ／入力監視の権限がありません。システム設定で許可するまでホットキーが反応しません。",
+        )
+    };
+    let script = format!(
+        r#"display notification "{}" with title "{}""#,
+        body.replace('\\', "\\\\").replace('"', "\\\""),
+        title.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .spawn();
+}
+
+/// Periodically re-check Accessibility/Input Monitoring permission (the two
+/// the hotkey CGEventTap depends on). If a hotkey was configured while the
+/// permission was missing (or it got revoked mid-session — e.g. a macOS
+/// update or TCC re-evaluation), `register_hotkeys` fails silently and the
+/// user is left with a hotkey that "looks" configured but never fires, with
+/// no feedback and no recovery short of an app restart. This closes that gap:
+/// detect the transition and auto re-register, and notify the user either way.
+async fn monitor_hotkey_permissions(app: tauri::AppHandle) {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(20));
+    loop {
+        ticker.tick().await;
+
+        let (accessibility, input_monitoring) = read_hotkey_permission_flags();
+        let ok = accessibility && input_monitoring;
+
+        let Some(state) = app.try_state::<AppState>() else {
+            continue;
+        };
+
+        let was_ok = {
+            let mut last = state.last_hotkey_permission_ok.lock().unwrap();
+            let prev = *last;
+            *last = Some(ok);
+            prev
+        };
+
+        let _ = app.emit(
+            "hotkey-permission-status",
+            HotkeyPermissionEvent {
+                accessibility,
+                input_monitoring,
+                ok,
+            },
+        );
+
+        let ui_language = {
+            let settings = state.settings.lock().await;
+            settings.ui_language.clone()
+        };
+
+        match was_ok {
+            Some(false) if ok => {
+                log::info!("Hotkey permissions recovered — reloading hotkeys");
+                let (hotkey_key, activation_mode, double_tap_ms, mode_hotkeys) = {
+                    let settings = state.settings.lock().await;
+                    (
+                        settings.hotkey.key.clone(),
+                        settings.activation_mode.clone(),
+                        settings.hotkey.double_tap_ms,
+                        settings.mode_hotkeys.clone(),
+                    )
+                };
+                reload_hotkeys(&app, &hotkey_key, activation_mode, double_tap_ms, &mode_hotkeys);
+                notify_permission_change(true, &ui_language);
+            }
+            Some(true) | None if !ok => {
+                log::warn!(
+                    "Hotkey permission missing (accessibility={}, input_monitoring={})",
+                    accessibility,
+                    input_monitoring
+                );
+                notify_permission_change(false, &ui_language);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Unregister all hotkeys (CGEventTap + global shortcuts).
 fn unregister_hotkeys(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
@@ -908,12 +1033,7 @@ async fn initialize_hotkeys(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn check_permissions() -> Result<PermissionStatus, String> {
     // Check Accessibility (AXIsProcessTrusted)
-    let accessibility = unsafe {
-        extern "C" {
-            fn AXIsProcessTrusted() -> bool;
-        }
-        AXIsProcessTrusted()
-    };
+    let accessibility = check_accessibility_trusted();
 
     // Check Microphone via AVFoundation's authorizationStatus
     let microphone = {
@@ -1516,6 +1636,7 @@ pub fn run() {
         record_shortcut: Arc::new(std::sync::Mutex::new(None)),
         mode_shortcuts: Arc::new(std::sync::Mutex::new(Vec::new())),
         paste_undoable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        last_hotkey_permission_ok: Arc::new(std::sync::Mutex::new(None)),
     };
 
     tauri::Builder::default()
@@ -1618,6 +1739,12 @@ pub fn run() {
             // (triggered via the initialize_hotkeys IPC command).
             if onboarding_completed {
                 register_hotkeys(app.handle(), &startup_hotkey, &startup_mode_hotkeys);
+
+                // Watch for Accessibility/Input Monitoring permission being
+                // revoked or (re-)granted after startup, and recover without
+                // requiring a manual app restart. See monitor_hotkey_permissions.
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(monitor_hotkey_permissions(handle));
             } else {
                 log::info!("Onboarding not completed — deferring hotkey registration");
             }

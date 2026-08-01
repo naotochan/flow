@@ -25,6 +25,7 @@ import {
   deleteHistoryEntry,
   copyHistoryText,
   pasteHistoryText,
+  openSystemPreferences,
   HistoryEntry,
   ReplacementRule,
 } from "../lib/ipc";
@@ -1546,11 +1547,27 @@ export function SettingsPanel() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
   const [updateVersion, setUpdateVersion] = useState("");
   const updateRef = useRef<Awaited<ReturnType<typeof check>> | null>(null);
+  const [hotkeyPermissionOk, setHotkeyPermissionOk] = useState(true);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
     getBuildNumber().then(setBuildNumber).catch(() => {});
     checkForUpdate();
+  }, []);
+
+  // Backend polls Accessibility/Input Monitoring every ~20s (see
+  // monitor_hotkey_permissions in lib.rs) since a hotkey can silently stop
+  // firing if permission is revoked or was never granted — this surfaces
+  // that instead of leaving the user wondering why the hotkey "isn't working".
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ accessibility: boolean; input_monitoring: boolean; ok: boolean }>(
+      "hotkey-permission-status",
+      (event) => setHotkeyPermissionOk(event.payload.ok)
+    ).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
   }, []);
 
   useEffect(() => {
@@ -1785,6 +1802,25 @@ export function SettingsPanel() {
       </aside>
 
       <main className="flex-1 overflow-y-auto p-6 bg-[var(--bg)]">
+        {!hotkeyPermissionOk && (
+          <div className="mb-5 rounded-xl p-4 border border-[var(--warning)]/30 bg-[var(--warning-soft)] flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-[var(--warning)]">
+                {t(TS.permissionBanner.title, lang)}
+              </p>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                {t(TS.permissionBanner.description, lang)}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => openSystemPreferences("accessibility")}
+              className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--warning)]/15 text-[var(--warning)] hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+            >
+              {t(TS.permissionBanner.openSettings, lang)}
+            </button>
+          </div>
+        )}
         <h2 className="text-base font-semibold text-[var(--text)] mb-5 text-pretty">
           {NAV_ITEMS.find((i) => i.key === section)?.label}
         </h2>
