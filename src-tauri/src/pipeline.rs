@@ -86,9 +86,14 @@ pub struct ErrorEvent {
 /// that slips past.
 const SILENCE_RMS_THRESHOLD: f32 = 0.002;
 
-/// Short, ambiguous phrases that are treated as hallucinations only when they
-/// make up the ENTIRE utterance. These could conceivably be real if the user
-/// actually said just this, so we require an exact (whole-string) match.
+/// Phrases treated as hallucinations only when they make up the ENTIRE
+/// utterance. Anything that could plausibly appear inside real dictation
+/// belongs here rather than in the substring list below — "ご覧いただき
+/// ありがとうございます" is a stock business phrase, and "資料をご覧いただき
+/// ありがとうございます" must survive.
+///
+/// Matching ignores whitespace and trailing punctuation, so whole hallucinated
+/// sentences can be pasted in as observed.
 const HALLUCINATION_EXACT: &[&str] = &[
     "ありがとうございました",
     "ありがとうございます",
@@ -97,7 +102,21 @@ const HALLUCINATION_EXACT: &[&str] = &[
     "Thank you.",
     "Goodbye.",
     "you",
-    "...",
+    // Video sign-offs that are also things a person might genuinely dictate.
+    "ご覧いただきありがとうございました",
+    "ご覧いただきありがとうございます",
+    "最後までご覧いただきありがとうございました",
+    "最後までご覧いただきありがとうございます",
+    "次回もお楽しみに",
+    "チャンネル登録お願いします",
+    "チャンネル登録をお願いします",
+    "字幕作成",
+    "Please subscribe.",
+    // Whole hallucinated sentences that carry no reusable marker. These can
+    // only be collected one at a time; new sightings go here, and they must be
+    // whole-utterance so a shared opening clause can't eat real speech
+    // ("子供のお話を聞いてみると面白いですね" is perfectly ordinary).
+    "子供のお話を聞いてみると 子供にとっての気持ちがいいです",
     // Whisper echoes the initial prompt back when fed silence or noise. These
     // must stay in sync with the prompts in api/whisper.rs.
     "音声入力による文章の書き取りです",
@@ -113,36 +132,27 @@ const HALLUCINATION_EXACT: &[&str] = &[
 /// these endlessly — 視聴ありがとうございました / 視聴してくださって
 /// ありがとうございました / 視聴いただきありがとうございます — so matching on a
 /// full sentence only catches the one variant we happened to write down.
+/// Every entry must fail this test: "could this appear in the middle of a
+/// sentence someone actually dictates?" If yes, it belongs in the exact list.
+/// "チャンネル登録" reads as a hallucination but "このチャンネル登録しておいて"
+/// is ordinary speech, which is why the bare noun is not here.
 const HALLUCINATION_CONTAINS: &[&str] = &[
     // Video sign-offs, by far the most common source.
     "視聴ありがとう",
     "清聴ありがとう",
     "視聴してくださって",
     "視聴してくださり",
-    "視聴いただき",
-    "最後まで視聴",
     "最後までご視聴",
-    "最後までご覧",
-    "ご覧いただきありがとう",
-    "ご覧くださりありがとう",
-    "ご覧くださってありがとう",
-    "次回もお楽しみに",
-    "チャンネル登録",
+    "チャンネル登録と高評価",
     "高評価とチャンネル",
-    "高評価をお願い",
     // Subtitle credits.
     "字幕をご覧",
-    "字幕作成",
+    "字幕作成者",
     "字幕提供",
     "thank you for watching",
     "thanks for watching",
-    "please subscribe",
-    "subtitles by",
+    "subscribe to my channel",
     "amara.org",
-    // Sentences seen in the wild that carry none of the markers above. These
-    // are whole hallucinated utterances rather than a recognizable family, so
-    // they can only be listed one by one — new sightings go here.
-    "子供のお話を聞いてみると",
 ];
 
 /// Lowercase, strip all whitespace, drop trailing sentence punctuation.
@@ -161,6 +171,8 @@ fn normalize_for_match(text: &str) -> String {
 /// Non-speech annotations Whisper writes for music, applause and the like:
 /// "(音楽)", "［拍手］", "【BGM】", "♪～♪".
 fn is_non_speech_annotation(normalized: &str) -> bool {
+    // No angle brackets: "<div>を使ってレイアウトして</div>" is real dictation
+    // in code mode, and no annotation uses them.
     const BRACKETS: &[(char, char)] = &[
         ('(', ')'),
         ('（', '）'),
@@ -168,17 +180,26 @@ fn is_non_speech_annotation(normalized: &str) -> bool {
         ('［', '］'),
         ('【', '】'),
         ('〔', '〕'),
-        ('<', '>'),
     ];
     let (Some(first), Some(last)) = (normalized.chars().next(), normalized.chars().last()) else {
         return false;
     };
-    if normalized.chars().count() >= 2
+    let len = normalized.chars().count();
+    // Short and with nothing bracketed inside, or this also swallows
+    // "(笑)そうですね、それでいきましょう(かっこ)" and parenthetical asides.
+    if (2..=12).contains(&len)
         && BRACKETS
             .iter()
             .any(|(open, close)| first == *open && last == *close)
     {
-        return true;
+        let inner_has_bracket = normalized
+            .chars()
+            .skip(1)
+            .take(len - 2)
+            .any(|c| BRACKETS.iter().any(|(o, c2)| c == *o || c == *c2));
+        if !inner_has_bracket {
+            return true;
+        }
     }
     // Music/filler symbols with nothing else in the utterance.
     !normalized.is_empty()
@@ -187,14 +208,18 @@ fn is_non_speech_annotation(normalized: &str) -> bool {
             .all(|c| matches!(c, '♪' | '♬' | '♫' | '〜' | '～' | '~' | '-' | '−' | 'ー' | '.' | '。'))
 }
 
-/// Wall-clock length of the capture. `audio_samples` is interleaved, so the
-/// frame count is the sample count divided by the channel count.
-fn recording_duration_ms(sample_count: usize, sample_rate: u32, channels: u16) -> u64 {
-    let frames_per_second = sample_rate as u64 * channels.max(1) as u64;
-    if frames_per_second == 0 {
-        return 0;
+/// Wall-clock length of the capture, or `None` if the device config makes it
+/// unknowable. `audio_samples` is interleaved, so one second of audio is
+/// `sample_rate * channels` entries.
+///
+/// `None` rather than `0`: a bogus sample rate would otherwise read as
+/// "0ms long" and silently discard every single recording.
+fn recording_duration_ms(sample_count: usize, sample_rate: u32, channels: u16) -> Option<u64> {
+    let samples_per_second = sample_rate as u64 * channels.max(1) as u64;
+    if samples_per_second == 0 {
+        return None;
     }
-    sample_count as u64 * 1000 / frames_per_second
+    Some(sample_count as u64 * 1000 / samples_per_second)
 }
 
 fn is_hallucination(text: &str) -> bool {
@@ -231,20 +256,10 @@ pub async fn handle_recording_complete(
     settings: &AppSettings,
     app_handle: &AppHandle,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Same teardown as every other early exit below — without hiding the
+    // overlay the recording pill stays on screen forever, and a hotkey brush
+    // that captures zero samples is exactly how you get here.
     if audio_samples.is_empty() {
-        restore_clipboard_backup(app_handle);
-        return Ok(());
-    }
-
-    // 0a. Too-short recording — an accidental hotkey brush captures a fraction
-    // of a second of room noise, which is exactly what Whisper hallucinates on.
-    let duration_ms = recording_duration_ms(audio_samples.len(), sample_rate, channels);
-    if settings.min_recording_ms > 0 && duration_ms < settings.min_recording_ms as u64 {
-        log::info!(
-            "Recording too short ({}ms < {}ms), skipping STT",
-            duration_ms,
-            settings.min_recording_ms
-        );
         restore_clipboard_backup(app_handle);
         hide_overlay(app_handle);
         let _ = app_handle.emit(
@@ -254,6 +269,28 @@ pub async fn handle_recording_complete(
             },
         );
         return Ok(());
+    }
+
+    // 0a. Too-short recording — an accidental hotkey brush captures a fraction
+    // of a second of room noise, which is exactly what Whisper hallucinates on.
+    let duration_ms = recording_duration_ms(audio_samples.len(), sample_rate, channels);
+    if let (Some(duration_ms), true) = (duration_ms, settings.min_recording_ms > 0) {
+        if duration_ms < settings.min_recording_ms as u64 {
+            log::info!(
+                "Recording too short ({}ms < {}ms), skipping STT",
+                duration_ms,
+                settings.min_recording_ms
+            );
+            restore_clipboard_backup(app_handle);
+            hide_overlay(app_handle);
+            let _ = app_handle.emit(
+                "recording-state",
+                RecordingStateEvent {
+                    state: "idle".to_string(),
+                },
+            );
+            return Ok(());
+        }
     }
 
     // 0b. Silence detection — skip STT if audio is too quiet
@@ -445,11 +482,12 @@ mod tests {
     #[test]
     fn duration_accounts_for_interleaved_channels() {
         // 48kHz stereo: 96000 samples is one second of audio, not two.
-        assert_eq!(recording_duration_ms(96_000, 48_000, 2), 1000);
-        assert_eq!(recording_duration_ms(48_000, 48_000, 1), 1000);
-        assert_eq!(recording_duration_ms(12_000, 48_000, 2), 125);
-        // A malformed config must not divide by zero.
-        assert_eq!(recording_duration_ms(1_000, 0, 2), 0);
+        assert_eq!(recording_duration_ms(96_000, 48_000, 2), Some(1000));
+        assert_eq!(recording_duration_ms(48_000, 48_000, 1), Some(1000));
+        assert_eq!(recording_duration_ms(12_000, 48_000, 2), Some(125));
+        // A malformed config yields "unknown", not "0ms", so the minimum-length
+        // guard skips instead of discarding every recording.
+        assert_eq!(recording_duration_ms(1_000, 0, 2), None);
     }
 
     #[test]
@@ -459,7 +497,6 @@ mod tests {
             "ご視聴ありがとうございました。",
             "最後まで視聴してくださって ありがとうございました。",
             "最後までご視聴いただきありがとうございます",
-            "本日もご覧いただきありがとうございました！",
             "チャンネル登録と高評価をお願いします",
             "字幕をご覧いただきまして、ご視聴ありがとうございました。",
             "Thanks for watching!",
@@ -468,6 +505,20 @@ mod tests {
         ] {
             assert!(is_hallucination(text), "should be filtered: {text}");
         }
+    }
+
+    /// Prefixed sign-offs we deliberately let through. "本日もご覧いただき
+    /// ありがとうございました" is a hallucination, but it is structurally
+    /// identical to "資料をご覧いただきありがとうございます", which is ordinary
+    /// business dictation. There is no way to keep one without eating the
+    /// other, and losing real speech is the worse failure — VAD, the minimum
+    /// recording length and the RMS gate are the defences that do not have to
+    /// guess at meaning.
+    #[test]
+    fn ambiguous_prefixed_signoffs_are_knowingly_kept() {
+        assert!(!is_hallucination("本日もご覧いただきありがとうございました！"));
+        // The bare phrase, with no prefix, is still filtered.
+        assert!(is_hallucination("ご覧いただきありがとうございました"));
     }
 
     #[test]
@@ -500,6 +551,23 @@ mod tests {
             "この動画の音量を上げてください",
             "Please review the pull request when you get a chance.",
             "ご覧のとおり、テストはすべて通っています",
+            // Every one of these was destroyed by the substring markers, three
+            // of them before this change. They are the reason the ambiguous
+            // markers moved to whole-utterance matching.
+            "資料をご覧いただきありがとうございます。",
+            "デモ動画を視聴いただき、ご意見をお聞かせください。",
+            "添付を最後までご覧ください。",
+            "動画を最後まで視聴した人の割合を教えて",
+            "アプリストアで高評価をお願いします",
+            "子供のお話を聞いてみると面白いですね",
+            "このチャンネル登録しておいて",
+            "字幕作成ツールを探しています",
+            "The subtitles by default are turned off.",
+            "Please subscribe to the newsletter before Friday.",
+            // Parenthetical asides and markup are not sound annotations.
+            "(笑)そうですね、それでいきましょう(かっこ)",
+            "<div>を使ってレイアウトしてください</div>",
+            "(これは重要な補足事項です)",
         ] {
             assert!(!is_hallucination(text), "should be kept: {text}");
         }
