@@ -481,6 +481,29 @@ function GeneralSection({
         </div>
       )}
 
+      <div className="space-y-2">
+        <FieldLabel htmlFor="min-recording-ms">{t(G.minRecording, lang)}</FieldLabel>
+        <div className="flex items-center gap-3">
+          <input
+            id="min-recording-ms"
+            type="range"
+            min={0}
+            max={5000}
+            step={250}
+            name="min_recording_ms"
+            value={settings.min_recording_ms ?? 500}
+            onChange={(e) => update({ min_recording_ms: Number(e.target.value) })}
+            className="flex-1 accent-[var(--accent)]"
+          />
+          <span className="text-xs text-[var(--text-muted)] w-14 text-right tabular-nums">
+            {(settings.min_recording_ms ?? 500) === 0
+              ? t(G.minRecordingOff, lang)
+              : `${((settings.min_recording_ms ?? 500) / 1000).toFixed(2)}s`}
+          </span>
+        </div>
+        <FieldHint>{t(G.minRecordingHint, lang)}</FieldHint>
+      </div>
+
       <HotkeyCapture settings={settings} update={update} lang={lang} />
 
       <div>
