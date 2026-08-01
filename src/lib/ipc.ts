@@ -99,6 +99,8 @@ export interface AppSettings {
   mode_hotkeys: Record<string, string>;
   /** @default 500 — discard recordings shorter than this; 0 disables */
   min_recording_ms: number;
+  /** @default false — strip "えーと" / "um" from the transcript and ask the LLM to do the same */
+  remove_fillers: boolean;
 }
 
 export const getSettings = () => invoke<AppSettings>("get_settings");
