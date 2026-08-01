@@ -45,12 +45,14 @@ fn tray_strings(ui_language: &str) -> TrayStrings {
 /// Builtins are localized here; custom modes carry their own user-typed name.
 fn mode_label(ui_language: &str, mode: &config::PostProcessMode) -> String {
     if !mode.builtin {
-        let name = mode.name.trim();
-        return if name.is_empty() {
-            mode.id.clone()
+        let placeholder = if ui_language == "en" {
+            "New mode"
         } else {
-            name.to_string()
+            "新しいモード"
         };
+        // A pasted name can be long or contain newlines; the menu can't take
+        // either, so custom names go through the same clamp as history entries.
+        return truncate_label(&mode.name, placeholder);
     }
     let label = match (ui_language == "en", mode.id.as_str()) {
         (true, "raw") => "Raw",
@@ -111,6 +113,11 @@ pub fn rebuild_tray_menu(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
             })
         })
         .unwrap_or_else(|| {
+            // Only reachable if the settings lock is held elsewhere. The menu
+            // then shows builtins with "format" checked, which can misreport
+            // the active mode and omit custom ones until the next rebuild
+            // (every recognition and every settings save triggers one).
+            log::warn!("Settings unavailable while rebuilding tray — showing defaults");
             let modes = config::default_modes()
                 .iter()
                 .map(|m| (m.id.clone(), mode_label("ja", m)))

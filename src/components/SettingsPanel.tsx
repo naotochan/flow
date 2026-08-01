@@ -1020,12 +1020,14 @@ function PostProcessingSection({
   update,
   updateLlm,
   applyLlmPreset,
+  saving,
   lang,
 }: {
   settings: AppSettings;
   update: (p: Partial<AppSettings>) => void;
   updateLlm: (p: Partial<LlmConfig>) => void;
   applyLlmPreset: (key: keyof typeof LLM_PRESETS) => void;
+  saving: boolean;
   lang: UILanguage;
 }) {
   const PP = TS.postProcessing;
@@ -1046,10 +1048,12 @@ function PostProcessingSection({
   const activeMode = modes.find((m) => m.id === modeId) ?? modes[0];
   const useLlm = activeMode?.use_llm ?? modeId !== "raw";
 
-  // Builtins are localized; custom modes carry the name the user typed.
+  // Builtins are localized; custom modes carry the name the user typed. The
+  // `??` guards a builtin id with no translation, which would otherwise hand
+  // `t()` an undefined and blank the whole panel.
   const labelOf = (mode: PostProcessMode) =>
     mode.builtin
-      ? t(PP.modes[mode.id as PostProcessModeId], lang)
+      ? t(PP.modes[mode.id as PostProcessModeId] ?? PP.newModeName, lang)
       : mode.name.trim() || t(PP.newModeName, lang);
 
   const setMode = (id: string) => {
@@ -1071,6 +1075,20 @@ function PostProcessingSection({
   const modeHotkeys = settings.mode_hotkeys ?? {};
   const [capturingModeId, setCapturingModeId] = useState<string | null>(null);
 
+  // Same local-draft-then-commit-on-blur shape as DictionaryRuleRow. Saving on
+  // every keystroke round-trips through disk and a `settings-changed` reload,
+  // which drops characters and tears down in-flight IME composition.
+  const [draftName, setDraftName] = useState(activeMode?.name ?? "");
+  useEffect(() => {
+    setDraftName(activeMode?.name ?? "");
+  }, [modeId, activeMode?.name]);
+
+  const commitName = () => {
+    const next = draftName.trim();
+    if (next === (activeMode?.name ?? "")) return;
+    updateActiveMode({ name: next });
+  };
+
   const setModeHotkey = (id: string, key: string | null) => {
     const next = { ...modeHotkeys };
     if (!key) {
@@ -1082,8 +1100,8 @@ function PostProcessingSection({
   };
 
   const addCustomMode = () => {
-    // Timestamp-based so a custom id can never collide with a builtin one.
-    const id = `custom-${Date.now().toString(36)}`;
+    // The `custom-` prefix keeps it clear of every builtin id.
+    const id = `custom-${newRuleId()}`;
     const created: PostProcessMode = {
       id,
       name: t(PP.newModeName, lang),
@@ -1145,17 +1163,22 @@ function PostProcessingSection({
               </button>
             );
           })}
+        </div>
+        {/* Outside the radiogroup: a non-radio child would corrupt the
+            "n of m" count screen readers announce for the group. */}
+        <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={addCustomMode}
-            className="px-2.5 py-2 rounded-lg text-sm whitespace-nowrap border border-dashed border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:border-[var(--text-faint)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+            disabled={saving}
+            className="px-2.5 py-2 rounded-lg text-sm whitespace-nowrap border border-dashed border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:border-[var(--text-faint)] transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
           >
             + {t(PP.addMode, lang)}
           </button>
         </div>
         <p className="text-[11px] text-[var(--text-faint)] leading-relaxed">
           {activeMode?.builtin
-            ? t(PP.modeDesc[modeId as PostProcessModeId], lang)
+            ? t(PP.modeDesc[modeId as PostProcessModeId] ?? PP.customModeDesc, lang)
             : t(PP.customModeDesc, lang)}
         </p>
 
@@ -1169,19 +1192,22 @@ function PostProcessingSection({
                 id="custom-mode-name"
                 type="text"
                 className={inputClass}
-                value={activeMode.name}
+                value={draftName}
+                maxLength={40}
                 placeholder={t(PP.customModeNamePlaceholder, lang)}
-                onChange={(e) => updateActiveMode({ name: e.target.value })}
+                onChange={(e) => setDraftName(e.target.value)}
+                onBlur={commitName}
               />
             </div>
             <button
               type="button"
+              disabled={saving}
               onClick={() => {
                 if (window.confirm(t(PP.deleteModeConfirm, lang)(labelOf(activeMode)))) {
                   deleteActiveMode();
                 }
               }}
-              className="px-3 py-2 rounded-lg text-sm text-[var(--danger)] hover:bg-[var(--danger-soft)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+              className="px-3 py-2 rounded-lg text-sm text-[var(--danger)] hover:bg-[var(--danger-soft)] transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
             >
               {t(PP.deleteMode, lang)}
             </button>
@@ -1923,6 +1949,7 @@ export function SettingsPanel() {
             update={update}
             updateLlm={updateLlm}
             applyLlmPreset={applyLlmPreset}
+            saving={saving}
             lang={lang}
           />
         )}

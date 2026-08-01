@@ -62,6 +62,18 @@ pub struct PostProcessMode {
     pub builtin: bool,
 }
 
+impl PostProcessMode {
+    /// Whether this mode actually calls the LLM.
+    ///
+    /// An empty prompt would hand the LLM the dictation with no instructions
+    /// at all, so a mode whose prompt has been cleared falls back to raw
+    /// output. Both the recording pipeline and the mic test go through here so
+    /// the test can't take a different path than the real thing.
+    pub fn runs_llm(&self) -> bool {
+        self.use_llm && !self.system_prompt.trim().is_empty()
+    }
+}
+
 fn default_active_mode_id() -> String {
     "format".to_string()
 }
@@ -198,13 +210,11 @@ pub fn normalize_modes(settings: &mut AppSettings) {
             if mode.id.trim().is_empty() {
                 continue;
             }
-            let name = if mode.name.trim().is_empty() {
-                mode.id.clone()
-            } else {
-                mode.name.clone()
-            };
+            // An empty name is left empty on purpose: writing the id in here
+            // would overwrite the text box the moment the user clears it to
+            // retype. The UI and tray each supply their own placeholder.
             ordered.push(PostProcessMode {
-                name,
+                name: mode.name.trim().to_string(),
                 builtin: false,
                 ..mode
             });
@@ -223,8 +233,11 @@ pub fn normalize_modes(settings: &mut AppSettings) {
     {
         settings.active_mode_id = default_active_mode_id();
     }
-    let known_ids: Vec<String> = settings.modes.iter().map(|m| m.id.clone()).collect();
-    settings.mode_hotkeys.retain(|id, _| known_ids.contains(id));
+    let known: std::collections::HashSet<&str> =
+        settings.modes.iter().map(|m| m.id.as_str()).collect();
+    settings
+        .mode_hotkeys
+        .retain(|id, _| known.contains(id.as_str()));
 
     let use_llm = resolve_active_mode(settings).use_llm;
     settings.llm.enabled = use_llm;
@@ -611,6 +624,17 @@ mod tests {
 
         let customs: Vec<&PostProcessMode> = s.modes.iter().filter(|m| !m.builtin).collect();
         assert_eq!(customs.len(), 1);
-        assert_eq!(customs[0].name, "custom-1", "unnamed falls back to the id");
+        assert!(
+            customs[0].name.is_empty(),
+            "an empty name stays empty so the user can retype it"
+        );
+    }
+
+    #[test]
+    fn a_cleared_prompt_stops_calling_the_llm() {
+        let mut mode = custom("custom-1", "議事録");
+        assert!(mode.runs_llm());
+        mode.system_prompt = "   \n".into();
+        assert!(!mode.runs_llm());
     }
 }

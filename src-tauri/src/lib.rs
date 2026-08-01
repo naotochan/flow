@@ -292,7 +292,7 @@ async fn test_microphone_stt(state: tauri::State<'_, AppState>) -> Result<SttTes
 
     // 4. LLM post-processing (active mode)
     let mode = config::resolve_active_mode(&settings);
-    let mut processed_text = if mode.use_llm {
+    let mut processed_text = if mode.runs_llm() {
         let lang_str = language.unwrap_or(&settings.language.primary);
         let prompt = config::render_mode_prompt(&mode.system_prompt, lang_str);
         match api::claude::post_process(&raw_text, &settings.llm, &prompt).await {
