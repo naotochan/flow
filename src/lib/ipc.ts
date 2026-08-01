@@ -125,6 +125,15 @@ export interface PermissionStatus {
   input_monitoring: boolean;
 }
 export const checkPermissions = () => invoke<PermissionStatus>("check_permissions");
+
+/** Payload of the `hotkey-permission-status` event, emitted every ~20s while
+ * the app runs post-onboarding so the UI can warn if the hotkey has silently
+ * stopped working (permission revoked, or never actually granted). */
+export interface HotkeyPermissionStatus {
+  accessibility: boolean;
+  input_monitoring: boolean;
+  ok: boolean;
+}
 export const initializeHotkeys = () => invoke<void>("initialize_hotkeys");
 export const saveOnboardingStep = (step: number) =>
   invoke<void>("save_onboarding_step", { step });
