@@ -1,6 +1,6 @@
 [package]
 name = "flow"
-version = "1.6.6"
+version = "1.6.7"
 description = "Desktop speech-to-text app — talk, polish, paste"
 authors = ["you"]
 edition = "2021"

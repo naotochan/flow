@@ -33,7 +33,7 @@ pub async fn transcribe(
         config.base_url.trim_end_matches('/')
     );
 
-    let client = reqwest::Client::new();
+    let client = crate::api::http_client();
     let mut request = client.post(&url).multipart(form);
 
     // Add auth header if API key is set (not needed for most local servers)

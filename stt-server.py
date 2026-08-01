@@ -49,6 +49,7 @@ async def transcribe(
     model: str = Form("large-v3"),
     language: str = Form(None),
     response_format: str = Form("json"),
+    prompt: str = Form(None),
 ):
     # Save uploaded audio to a temp file (faster-whisper needs a file path)
     audio_bytes = await file.read()
@@ -63,9 +64,52 @@ async def transcribe(
         kwargs = {}
         if language:
             kwargs["language"] = language
+        # The client sends an anti-hallucination dictation prompt (see
+        # api/whisper.rs). Cloud OpenAI-compatible endpoints honour it; without
+        # this the local server silently dropped it as an unknown form field.
+        if prompt:
+            kwargs["initial_prompt"] = prompt
 
-        segments, info = whisper.transcribe(tmp_path, **kwargs)
-        text = "".join(segment.text for segment in segments).strip()
+        segments, info = whisper.transcribe(
+            tmp_path,
+            # Strip silence/noise before decoding instead of relying entirely
+            # on post-hoc string matching for hallucinations. Also cuts
+            # processing time by skipping dead air.
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500),
+            # Without this, one hallucinated segment biases the decoder's
+            # context for every segment after it, letting it cascade through
+            # the rest of the utterance.
+            condition_on_previous_text=False,
+            **kwargs,
+        )
+
+        kept_text = []
+        dropped = 0
+        for segment in segments:
+            # Same combined heuristic OpenAI's own decoder uses to flag a
+            # segment as silence/noise mis-decoded as speech: confident-looking
+            # text (avg_logprob) that the model itself also flagged as
+            # likely-no-speech (no_speech_prob).
+            if segment.no_speech_prob > 0.6 and segment.avg_logprob < -1.0:
+                dropped += 1
+                continue
+            # A segment that's mostly the same token(s) repeated is a classic
+            # hallucination signature (e.g. looping on one phrase over silence).
+            #
+            # Whisper's stock 2.4 threshold is tuned for English and is too
+            # tight for Japanese: measured gzip ratios are ~1.0-1.7 for normal
+            # speech but reach ~3.1 for genuine back-channel-heavy utterances
+            # ("そうですね、はい、はい…"), while real hallucination loops land
+            # at 5.8-16. 3.5 keeps the loops and stops eating real dictation.
+            if segment.compression_ratio > 3.5:
+                dropped += 1
+                continue
+            kept_text.append(segment.text)
+
+        text = "".join(kept_text).strip()
+        if dropped:
+            logger.info(f"Dropped {dropped} low-confidence segment(s)")
 
         logger.info(f"Transcribed ({info.language}, {info.duration:.1f}s): {text}")
 
