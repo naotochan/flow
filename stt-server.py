@@ -47,9 +47,9 @@ def get_model():
 async def transcribe(
     file: UploadFile = File(...),
     model: str = Form("large-v3"),
-    language: str = Form(None),
+    language: str | None = Form(None),
     response_format: str = Form("json"),
-    prompt: str = Form(None),
+    prompt: str | None = Form(None),
 ):
     # Save uploaded audio to a temp file (faster-whisper needs a file path)
     audio_bytes = await file.read()
@@ -67,6 +67,8 @@ async def transcribe(
         # The client sends an anti-hallucination dictation prompt (see
         # api/whisper.rs). Cloud OpenAI-compatible endpoints honour it; without
         # this the local server silently dropped it as an unknown form field.
+        # Note: combined with condition_on_previous_text=False below, this only
+        # steers the first 30s window — long dictations lose it after that.
         if prompt:
             kwargs["initial_prompt"] = prompt
 
@@ -75,8 +77,12 @@ async def transcribe(
             # Strip silence/noise before decoding instead of relying entirely
             # on post-hoc string matching for hallucinations. Also cuts
             # processing time by skipping dead air.
+            # threshold is loosened from Silero's 0.5 default to match the
+            # deliberately low RMS gate in pipeline.rs: that gate was lowered to
+            # let quiet dictation through, and a stock-threshold VAD here would
+            # just discard the same quiet speech one stage later.
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
+            vad_parameters=dict(min_silence_duration_ms=500, threshold=0.35),
             # Without this, one hallucinated segment biases the decoder's
             # context for every segment after it, letting it cascade through
             # the rest of the utterance.
@@ -84,18 +90,21 @@ async def transcribe(
             **kwargs,
         )
 
+        # No no_speech_prob/avg_logprob check here on purpose: faster-whisper
+        # already skips windows where no_speech_prob > 0.6 and avg_logprob
+        # <= -1.0 (transcribe.py, "no voice activity check"), so any segment we
+        # receive has already passed that exact test — re-testing it would be
+        # dead code.
         kept_text = []
+        all_text = []
         dropped = 0
         for segment in segments:
-            # Same combined heuristic OpenAI's own decoder uses to flag a
-            # segment as silence/noise mis-decoded as speech: confident-looking
-            # text (avg_logprob) that the model itself also flagged as
-            # likely-no-speech (no_speech_prob).
-            if segment.no_speech_prob > 0.6 and segment.avg_logprob < -1.0:
-                dropped += 1
-                continue
-            # A segment that's mostly the same token(s) repeated is a classic
-            # hallucination signature (e.g. looping on one phrase over silence).
+            # segments is a generator, so stash every segment's text on the way
+            # past: it cannot be replayed for the fallback below.
+            all_text.append(segment.text)
+
+            # Runaway repetition is a classic hallucination signature (looping
+            # on one phrase over silence).
             #
             # Whisper's stock 2.4 threshold is tuned for English and is too
             # tight for Japanese: measured gzip ratios are ~1.0-1.7 for normal
@@ -104,12 +113,28 @@ async def transcribe(
             # at 5.8-16. 3.5 keeps the loops and stops eating real dictation.
             if segment.compression_ratio > 3.5:
                 dropped += 1
+                logger.debug(
+                    f"Dropped repetitive segment (ratio={segment.compression_ratio:.2f}): "
+                    f"{segment.text!r}"
+                )
                 continue
             kept_text.append(segment.text)
 
         text = "".join(kept_text).strip()
         if dropped:
-            logger.info(f"Dropped {dropped} low-confidence segment(s)")
+            logger.info(f"Dropped {dropped} repetitive segment(s)")
+
+        # compression_ratio is computed per 30s decode window, not per segment,
+        # so a single bad window can take real speech down with it. If the
+        # filter ate everything, it is more likely wrong than the transcript is:
+        # fall back to the unfiltered text and let the client-side phrase
+        # filter (pipeline.rs) make the final call.
+        if not text and dropped:
+            text = "".join(all_text).strip()
+            if text:
+                logger.warning(
+                    f"All {dropped} segment(s) filtered; falling back to unfiltered text"
+                )
 
         logger.info(f"Transcribed ({info.language}, {info.duration:.1f}s): {text}")
 
@@ -151,4 +176,7 @@ if __name__ == "__main__":
     logger.info(f"Starting STT server on {args.host}:{args.port} with model '{args.model}'")
     logger.info("Model will be downloaded on first request if not cached.")
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    # The client reuses one pooled connection across dictations (see
+    # api/mod.rs). uvicorn's 5s default would close those idle sockets long
+    # before reqwest evicts them, so keep-alive has to outlive the pool.
+    uvicorn.run(app, host=args.host, port=args.port, timeout_keep_alive=120)

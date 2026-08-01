@@ -328,7 +328,7 @@ async fn check_stt_server(state: tauri::State<'_, AppState>) -> Result<bool, Str
     );
     drop(settings);
 
-    match reqwest::Client::new()
+    match crate::api::http_client()
         .get(&url)
         .timeout(std::time::Duration::from_secs(2))
         .send()
@@ -370,7 +370,7 @@ async fn ensure_stt_server(state: &AppState, app: &tauri::AppHandle) -> Result<(
         )
     };
     let url = format!("http://{}:{}/health", host, port);
-    let healthy = reqwest::Client::new()
+    let healthy = crate::api::http_client()
         .get(&url)
         .timeout(std::time::Duration::from_secs(1))
         .send()
@@ -1173,7 +1173,9 @@ async fn setup_local_whisper(
 
     let pip_path = venv_path.join("bin").join("pip");
     let pip_output = tokio::process::Command::new(&pip_path)
-        .args(["install", "faster-whisper", "uvicorn", "fastapi", "python-multipart", "huggingface_hub"])
+        // faster-whisper is pinned to 1.x: stt-server.py depends on 1.x VAD
+        // option names and on the decoder applying no_speech_threshold itself.
+        .args(["install", "faster-whisper>=1.1,<2", "uvicorn", "fastapi", "python-multipart", "huggingface_hub"])
         .output()
         .await
         .map_err(|e| format!("Failed to run pip: {}", e))?;
@@ -1294,7 +1296,7 @@ fn handle_hotkey_event(app_handle: &tauri::AppHandle, event: hotkey::HotkeyEvent
                         (s.local_stt_server.host.clone(), s.local_stt_server.port)
                     };
                     let url = format!("http://{}:{}/health", host, port);
-                    let client = reqwest::Client::new();
+                    let client = crate::api::http_client();
                     let mut server_ok = client
                         .get(&url)
                         .timeout(std::time::Duration::from_secs(1))

@@ -21,12 +21,18 @@ pub async fn transcribe(
 
     // Prompt helps Whisper avoid hallucinating common phrases on silence/noise.
     // A neutral dictation-style prompt steers the model toward real transcription.
+    //
+    // Auto mode deliberately sends nothing: the prompt is also a language cue,
+    // so an English one would bias detection against a Japanese speaker on the
+    // short utterances where detection is already shakiest.
     let prompt = match language {
-        Some("ja") => "音声入力による文章の書き取りです。",
-        Some("en") => "This is a voice dictation transcription.",
-        _ => "Voice dictation transcription.",
+        Some("ja") => Some("音声入力による文章の書き取りです。"),
+        Some("en") => Some("This is a voice dictation transcription."),
+        _ => None,
     };
-    form = form.text("prompt", prompt.to_string());
+    if let Some(prompt) = prompt {
+        form = form.text("prompt", prompt.to_string());
+    }
 
     let url = format!(
         "{}/audio/transcriptions",
