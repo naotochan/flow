@@ -53,7 +53,7 @@
     },
     "macOS": {
       "infoPlist": "../Info.plist",
-      "bundleVersion": "317",
+      "bundleVersion": "318",
       "signingIdentity": "Apple Development: naoto.k70@gmail.com (S27SCJ956H)",
       "entitlements": "Entitlements.plist"
     },
